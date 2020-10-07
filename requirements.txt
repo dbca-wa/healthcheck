@@ -3,3 +3,5 @@ requests==2.21.0
 django-confy==1.0.4
 python-dateutil==2.7.3
 pytz==2018.5
+
+urllib3>=1.25.9 # not directly required, pinned by Snyk to avoid a vulnerability
