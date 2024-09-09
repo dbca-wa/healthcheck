@@ -20,13 +20,13 @@ test = ["astroid (>=1,<2)", "astroid (>=2,<4)", "pytest"]
 
 [[package]]
 name = "bottle"
-version = "0.12.25"
+version = "0.13.1"
 description = "Fast and simple WSGI-framework for small web-applications."
 optional = false
 python-versions = "*"
 files = [
-    {file = "bottle-0.12.25-py3-none-any.whl", hash = "sha256:d6f15f9d422670b7c073d63bd8d287b135388da187a0f3e3c19293626ce034ea"},
-    {file = "bottle-0.12.25.tar.gz", hash = "sha256:e1a9c94970ae6d710b3fb4526294dfeb86f2cb4a81eff3a4b98dc40fb0e5e021"},
+    {file = "bottle-0.13.1-py2.py3-none-any.whl", hash = "sha256:d5e068ad0b4ed3422231ad59bd9ea646a141f57a9c90587212d63477ec04fe96"},
+    {file = "bottle-0.13.1.tar.gz", hash = "sha256:a48852dc7a051353d3e4de3dd5590cd25de370bcfd94a72237561e314ceb0c88"},
 ]
 
 [[package]]
@@ -694,4 +694,4 @@ files = [
 [metadata]
 lock-version = "2.0"
 python-versions = "^3.11"
-content-hash = "a2cbe7042a290d55e0e570a3c96d646448e3698b4841754ad970a8591652c467"
+content-hash = "2785e08c94042909e1dbc9d8f4fe7a007e6089efdf82b1e0d88328218297ed0d"
