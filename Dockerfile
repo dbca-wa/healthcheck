@@ -35,7 +35,7 @@ RUN --mount=type=cache,target=/root/.cache \
 
 ##################################################################################
 
-FROM python:3.13-alpine
+FROM python:3.14.0rc1-alpine
 LABEL org.opencontainers.image.authors=asi@dbca.wa.gov.au
 LABEL org.opencontainers.image.source=https://github.com/dbca-wa/healthcheck
 
