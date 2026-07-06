@@ -14,7 +14,7 @@ dependencies = [
   "pytz==2026.2",
   "python-dotenv==1.2.2",
   "httpx==0.28.1",
-  "humanize==4.14.0",
+  "humanize==4.16.0",
   "defusedxml==0.7.1",
 ]
 
