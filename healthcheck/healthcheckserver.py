@@ -1,18 +1,22 @@
 import logging
 import socket as builtinsocket
 import asyncio
+import aiofiles
 import threading
 import sys
 import os
 
 from . import shutdown
 from . import settings
-from .healthcheck import BaseServiceHealthCheckTask,healthcheck
+from .healthcheck import BaseServiceHealthCheckTask,HealthCheck
 from . import socket
 from . import exceptions
 from . import utils
 
 logger = logging.getLogger("healthcheck.healthcheckserver")
+
+healthcheck = None
+editing_healthcheck = None
 
 class BaseHealthStatusSubscriptor(socket.Connection):
     subscriptors = None
@@ -20,17 +24,13 @@ class BaseHealthStatusSubscriptor(socket.Connection):
     def __init__(self,server,clientaddr,reader,writer):
         super().__init__(server,clientaddr,reader,writer)
         self._send_task = None
-        self.__class__.subscriptors.append(self)
 
     async def receive(self):
         raise Exception("Receiving data Not Supported")
 
-    async def close(self):
-        await super().close()
-        try:
-            self.__class__.subscriptors.remove(self)
-        except ValueError as ex:
-            pass
+    async def register(self):
+        async with self._lock:
+            self.__class__.subscriptors.append(self)
 
     @classmethod
     async def _send_data(cls,data):
@@ -49,12 +49,13 @@ class BaseHealthStatusSubscriptor(socket.Connection):
                         if subscriptor._send_task:
                             try:
                                 await subscriptor._send_task
+                            except exceptions.ConnectionClosed as ex:
+                                #connection closed, remove it from subscriptors
+                                del cls.subscriptors[index]
                             finally:
                                 subscriptor._send_task = None
                     except IndexError as ex:
                         continue
-        except exceptions.ConnectionClosed as ex:
-            pass
         except Exception as ex:
             if not shutdown.shutdowning:
                 raise ex
@@ -87,7 +88,9 @@ class HealthStatusSubscriptor(BaseHealthStatusSubscriptor):
         for section in healthcheck.sections.values():
             for service in section["services"].values():
                 if service.get("healthstatus"):
-                    await self.send([socket.INITIAL_HEALTHSTATUS,[[service.sectionid,service.serviceid],service["healthstatus"]]])
+                    await self.send([socket.INITIAL_HEALTHSTATUS,[[service.sectionid,service.id],service["healthstatus"]]])
+
+        await self.register()
 
     @classmethod
     async def send_healthconfig_hashcode(cls):
@@ -100,20 +103,22 @@ class EditingHealthStatusSubscriptor(BaseHealthStatusSubscriptor):
     conn_type = socket.EDITING_HEALTHSTATUS_SUBSCRIPTOR
 
     async def initialize(self):
-        await self.send([socket.HEALTHCONFIG_HASHCODE,healthcheck.editing_healthcheck.config_hashcode])
-        for section in healthcheck.editing_healthcheck.sections.values():
+        await self.send([socket.HEALTHCONFIG_HASHCODE,editing_healthcheck.config_hashcode])
+        for section in editing_healthcheck.sections.values():
             for service in section["services"].values():
                 if service.get("healthstatus"):
-                    await self.send([socket.INITIAL_HEALTHSTATUS,[[service.sectionid,service.serviceid],service["healthstatus"]]])
+                    await self.send([socket.INITIAL_HEALTHSTATUS,[[service.sectionid,service.id],service["healthstatus"]]])
 
-        if healthcheck.editing_healthcheck.is_continuous_check_started:
+        if editing_healthcheck.is_continuous_check_started:
             await self.continuouscheck_started()
         else:
             await self.continuouscheck_stopped()
 
+        await self.register()
+
     @classmethod
     async def send_healthconfig_hashcode(cls):
-        await cls._send_data([socket.HEALTHCONFIG_HASHCODE,healthcheck.editing_healthcheck.config_hashcode])
+        await cls._send_data([socket.HEALTHCONFIG_HASHCODE,editing_healthcheck.config_hashcode])
     
 class ServiceHealthCheckTask(BaseServiceHealthCheckTask):
     def __init__(self,servicehealthcheck,socketserver):
@@ -138,27 +143,27 @@ class CommandConnection(socket.CommandConnection):
     RELOAD_DASHBOARD="reload_dashboard"
     async def start_preview_healthcheck(self):
         await EditingHealthStatusSubscriptor.send_healthconfig_hashcode()
-        if not healthcheck.editing_healthcheck.is_continuous_check_started:
-            await healthcheck.editing_healthcheck.continuous_check(self.server,taskcls=EditingServiceHealthCheckTask)
+        if not editing_healthcheck.is_continuous_check_started:
+            await editing_healthcheck.continuous_check(self.server,taskcls=EditingServiceHealthCheckTask)
             await EditingHealthStatusSubscriptor.continuouscheck_started()
         return [True,"OK"]
 
     async def stop_preview_healthcheck(self):
-        if healthcheck.editing_healthcheck.is_continuous_check_started:
-            healthcheck.editing_healthcheck.stop_continuous_check()
+        if editing_healthcheck.is_continuous_check_started:
+            editing_healthcheck.stop_continuous_check()
             await EditingHealthStatusSubscriptor.continuouscheck_stopped()
         return [True,"OK"]
 
     async def reload_editing_healthcheck(self):
-        changed = healthcheck.editing_healthcheck.reload()
-        if changed and healthcheck.editing_healthcheck.is_continuous_check_started:
-            healthcheck.editing_healthcheck.stop_continuous_check()  
+        changed = await editing_healthcheck.reload()
+        if changed and editing_healthcheck.is_continuous_check_started:
+            editing_healthcheck.stop_continuous_check()  
             await EditingHealthStatusSubscriptor.send_healthconfig_hashcode()
-            await healthcheck.editing_healthcheck.continuous_check(self.server,taskcls=EditingServiceHealthCheckTask)
+            await editing_healthcheck.continuous_check(self.server,taskcls=EditingServiceHealthCheckTask)
         return [True,"OK"]
 
     async def reload_healthcheck(self):
-        changed = healthcheck.reload()
+        changed = await healthcheck.reload()
         if changed and healthcheck.is_continuous_check_started:
             healthcheck.stop_continuous_check()  
             await HealthStatusSubscriptor.send_healthconfig_hashcode()
@@ -193,9 +198,11 @@ class HealthCheckServer(socket.SocketServer):
         lockfile = os.path.join(settings.HEALTHCHECK_DATA_DIR,".healthcheckserver.lock")
         if os.path.exists(lockfile):
             #shutdown the current server first
+            data = None
             try:
-                with open(lockfile) as f:
-                    data = f.read().strip()
+                async with aiofiles.open(lockfile) as f:
+                    data = await f.read()
+                    data = data.strip()
                 host,port = data.split(":",1)
                 port = int(port)
                 commandclient = socket.CommandClient(host,port)
@@ -230,8 +237,8 @@ class HealthCheckServer(socket.SocketServer):
                 s = builtinsocket.socket(builtinsocket.AF_INET, builtinsocket.SOCK_DGRAM)
                 s.connect((url, 80))
                 ip = s.getsockname()[0]
-                with open(lockfile,'w') as f:
-                    f.write("{}:{}".format(ip,settings.HEALTHCHECKSERVER_PORT))
+                async with aiofiles.open(lockfile,'w') as f:
+                    await f.write("{}:{}".format(ip,settings.HEALTHCHECKSERVER_PORT))
                 lockfile_ex = None
                 break
             except Exception as ex:
@@ -247,9 +254,13 @@ class HealthCheckServer(socket.SocketServer):
         await super().start()
 
 async def main():
+    global healthcheck
+    global editing_healthcheck
     try:
         server = HealthCheckServer(f_get_connection_cls=get_connection_cls)
         await server.start()
+        healthcheck = await HealthCheck.get_instance()
+        editing_healthcheck = await healthcheck.get_editing_healthcheck()
         await healthcheck.continuous_check(server,taskcls=ServiceHealthCheckTask)
         await shutdown.wait()
         while True:

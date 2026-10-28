@@ -27,6 +27,7 @@ class SocketClient(object):
         self.__class__.count += 1
         self.name = "{} socketclient({}:{})_{}".format(self.conn_type,self.host,self.port,self.count)
         self._conn = None #[reader,writer]
+        self._last_connecttime = None
         shutdown.register_service(self)
 
 
@@ -56,7 +57,7 @@ class SocketClient(object):
 
     async def get_connection(self,reconnect_attempts=0):
         """
-        Return a connection otherwise throw exception SystemShutdown or SocketClientTypeNotSupport
+        Return a connection otherwise throw exception SystemShutdown or SystemShutdown
 
         """
         reconnect = 0
@@ -69,6 +70,11 @@ class SocketClient(object):
                 writer = None
                 try:
                     logger.debug("{}: Try to connect to socket server.".format(self))
+
+                    if self._last_connecttime:
+                        wait = settings.BLOCK_TIMEOUT - (utils.now() - self._last_connecttime).total_seconds()
+                        if wait > 0:
+                            await asyncio.sleep(settings.BLOCK_TIMEOUT)
 
                     async with asyncio.timeout(2):
                         reader,writer = await asyncio.open_connection(self.host,self.port) 
@@ -88,19 +94,19 @@ class SocketClient(object):
                     data = await conn.receive()
 
                     if not isinstance(data,(list,tuple)) or len(data) < 2:
-                        raise exceptions.SocketClientTypeNotSupport("{}: Failed to create the {} socket client".format(self.conn_type))
+                        raise exceptions.SystemShutdown("{}: Failed to create the {} socket client".format(self.conn_type))
                     elif data[0] == status.SUCCEED:
                         logger.info("{}: The {} socket client is established".format(self,self.conn_type))
                         self.post_connected()
                         self._conn = conn
                     else:
-                       raise exceptions.SocketClientTypeNotSupport(data[1])
+                       raise exceptions.SystemShutdown(data[1])
 
                 except Exception as ex:
                     logger.error("{} : Failed to connect to socket server.{}:{}".format(self,ex.__class__.__name__,str(ex)))
                     if conn:
                         await conn.close()
-                    if isinstance(ex,(exceptions.SystemShutdown,exceptions.SocketClientTypeNotSupport)):
+                    if isinstance(ex,(exceptions.SystemShutdown,exceptions.SystemShutdown)):
                         raise ex
                     else:
                         reconnect += 1
@@ -110,6 +116,8 @@ class SocketClient(object):
                             continue
                         else:
                             raise ex
+                finally:
+                    self._last_connecttime = utils.now()
 
         if shutdown.shutdowning:
             raise exceptions.SystemShutdown()
@@ -131,9 +139,6 @@ class SocketClient(object):
                 await conn.send(data)
             return
         except exceptions.SystemShutdown as ex:
-            await self.close()
-            raise ex
-        except exceptions.SocketClientTypeNotSupport as ex:
             await self.close()
             raise ex
         except asyncio.TimeoutError as ex:
@@ -164,18 +169,18 @@ class SocketClient(object):
         except exceptions.SystemShutdown as ex:
             await self.close()
             raise ex
-        except exceptions.SocketClientTypeNotSupport as ex:
-            await self.close()
-            raise ex
         except exceptions.MalformedData as ex:
             raise ex
         except asyncio.TimeoutError as ex:
+            #timeout doesn't mean the server is offline,
+            #logger.error("{}: Failed to receive data from server.{}:{}".format(self,ex.__class__.__name__,str(ex)))
+            #await self.close()
+            raise ex
+        except (exceptions.ConnectionClosed,ConnectionResetError,ConnectionResetError) as ex:
+            logger.error("{}: Unexpected exception.\n{}".format(self,traceback.format_exc()))
             await self.close()
             raise ex
         except Exception as ex:
-            if not isinstance(ex,(exceptions.ConnectionClosed,ConnectionResetError,ConnectionResetError)):
-                logger.error("{}: Unexpected exception.\n{}".format(self,traceback.format_exc()))
-            await self.close()
             raise ex
 
 class CommandClient(SocketClient):
@@ -206,8 +211,6 @@ class CommandClient(SocketClient):
                     else:
                         raise exceptions.FailedResponse(res[1])
                 except exceptions.SystemShutdown as ex:
-                    raise ex
-                except exceptions.SocketClientTypeNotSupport as ex:
                     await self.close()
                     raise ex
                 except exceptions.MalformedData as ex:

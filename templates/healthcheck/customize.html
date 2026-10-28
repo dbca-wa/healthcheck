@@ -44,9 +44,9 @@
               <div class="customizeservicename">{{service.name}}</div>
               <div class="customizeselect">
                   {% if service.selected %}
-                  <input type="checkbox" name="{{section.sectionid}}:{{service.serviceid}}" checked/>
+                  <input type="checkbox" name="{{section.id}}:{{service.id}}" checked/>
                   {% else %}
-                  <input type="checkbox" name="{{section.sectionid}}:{{service.serviceid}}" />
+                  <input type="checkbox" name="{{section.id}}:{{service.id}}" />
                   {% endif %}
               </div>
           </div>

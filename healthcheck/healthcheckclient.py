@@ -6,8 +6,18 @@ from . import shutdown
 from . import socket
 from .lists import CycleList
 from . import settings
-from .healthcheck import healthcheck
+from .healthcheck import HealthCheck
 from . import utils
+
+healthcheck = None
+editing_healthcheck = None
+
+async def init_healthcheckclient():
+    global healthcheck
+    global editing_healthcheck
+
+    healthcheck = await HealthCheck.get_instance()
+    editing_healthcheck = await healthcheck.get_editing_healthcheck()
 
 
 logger = logging.getLogger("healthcheck.healthcheckclient")
@@ -100,7 +110,7 @@ class BaseHealthStatusListenerClient(socket.SocketClient):
                     #logger.error("Receiving health status data: code={}, data={}".format(status_code,data))
                     if status_code == socket.HEALTHCONFIG_HASHCODE:
                         if self.healthcheck.config_hashcode != data:
-                            self.healthcheck.reload()
+                            await self.healthcheck.reload()
                             self._statuslist.add("reload")
                             self._wait.set()
                     elif status_code == socket.INITIAL_HEALTHSTATUS:
@@ -158,7 +168,7 @@ class HealthStatusListenerClient(BaseHealthStatusListenerClient):
     conn_type = socket.HEALTHSTATUS_SUBSCRIPTOR
 
     def __init__(self):
-        #super().__init__(settings.HEARTBEAT * 3)
+        #super().__init__(settings.HEARTBEAT * 2)
         super().__init__(0)
 
     @property
@@ -173,13 +183,18 @@ class EditingHealthStatusListenerClient(BaseHealthStatusListenerClient):
 
     @property
     def healthcheck(self):
-        return healthcheck.editing_healthcheck
+        return editing_healthcheck
 
 healthstatuslistener = HealthStatusListenerClient()
 editinghealthstatuslistener = EditingHealthStatusListenerClient()
 
 async def main():
     try:
+        global healthcheck
+        global editing_healthcheck
+        healthcheck = await HealthCheck.get_instance()
+        editing_healthcheck = await healthcheck.get_editing_healthcheck()
+
         healthstatuslistener.start()
         client = socket.CommandClient("command")
         while True:

@@ -12,7 +12,7 @@ from .response import TestResponse
 from . import settings
 from .healthcheck import HealthCheck
 
-if __name__ == '__main__':
+async def main():
     if len(sys.argv) > 1:
         jsonfile = sys.argv[1]
     else:
@@ -29,6 +29,7 @@ if __name__ == '__main__':
         print("==============================================================================")
         print("Test Case : {}".format(testcase))
         healthcheck = HealthCheck(configs)
+        await healthcheck.load_configs()
     
         if not healthcheck.sections:
             print("All healthcheck sections are skipped.")
@@ -61,3 +62,8 @@ if __name__ == '__main__':
         healthstatus = healthcheck.check_response(serviceconfig,res)
         
 
+if __name__ == '__main__':
+    try:
+        asyncio.run(main())
+    except asyncio.CancelledError as ex:
+        pass

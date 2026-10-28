@@ -42,6 +42,10 @@ def lambda_func_fatctory(service,func):
 
 
 def parse_checkingtime(checkingtime):
+    """
+    If checking time is None, or can checking all day, return None
+    Otherwise, return a list of time range[start check time(seconds in the day),end check time (seconds in the day),start check time(str),end check time(str)]
+    """
     if not checkingtime:
         return None
     else:
