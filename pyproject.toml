@@ -20,7 +20,7 @@ dependencies = [
 
 [dependency-groups]
 dev = [
-  "ipython>=9.17.0",
+  "ipython>=9.18.0",
   "pre-commit>=4.6.2",
   "pytest>=9.1.1",
   "pytest-asyncio>=1.4.0",
