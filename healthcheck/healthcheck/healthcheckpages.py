@@ -747,7 +747,7 @@ class HealthCheckPages(BasicHealthCheckPages):
                         await f.write(json.dumps(details,cls=serializers.JSONFormater))
 
             if self._errorpages and healthcheckstatus[2] != "green" :
-                cleaned = cleaned or await self._errorpages.save_healthcheckstatus(healthcheckstatus)
+                cleaned = await self._errorpages.save_healthcheckstatus(healthcheckstatus) or cleaned
             
             if cleaned:
                 #a history clean action was performed. try to clean the expired details
