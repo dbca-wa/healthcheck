@@ -10,6 +10,7 @@ from .. import exceptions
 from .. import shutdown
 from ..healthcheck import HealthCheck
 from .. import utils
+from .. import timezone
 
 from . import status
 from . import connectiontype
@@ -72,7 +73,7 @@ class SocketClient(object):
                     logger.debug("{}: Try to connect to socket server.".format(self))
 
                     if self._last_connecttime:
-                        wait = settings.BLOCK_TIMEOUT - (utils.now() - self._last_connecttime).total_seconds()
+                        wait = settings.BLOCK_TIMEOUT - (timezone.now() - self._last_connecttime).total_seconds()
                         if wait > 0:
                             await asyncio.sleep(settings.BLOCK_TIMEOUT)
 
@@ -117,7 +118,7 @@ class SocketClient(object):
                         else:
                             raise ex
                 finally:
-                    self._last_connecttime = utils.now()
+                    self._last_connecttime = timezone.now()
 
         if shutdown.shutdowning:
             raise exceptions.SystemShutdown()

@@ -3,8 +3,6 @@ import logging
 import asyncio
 import aiofiles.os
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime,UTC
-from zoneinfo import ZoneInfo
 
 from . import settings
 
@@ -65,43 +63,4 @@ async def deletedir(folder):
                 await deletedir(f)
         #delete the folder itself
         await aiofiles.os.rmdir(folder)
-
-def now():
-    return datetime.now().astimezone(settings.TZ)
-
-def parse_datetime(dt,pattern="%Y-%m-%dT%H:%M:%S.%f"):
-    return datetime.strptime(dt,pattern).replace(tzinfo=settings.TZ)
-
-def format_datetime(dt=None,pattern="%Y-%m-%dT%H:%M:%S",timezone=settings.TZ):
-    if not dt:
-        dt = now()
-    dt_tzinfo = dt.tzinfo or settings.TZ
-
-    if not timezone:
-        timezone = settings.TZ
-    elif isinstance(timezone,str):
-        if timezone == "UTC":
-            timzone = UTC
-        else:
-            timezone = ZoneInfo(timezone)
-
-    if dt_tzinfo == timezone:
-        return dt.strftime(pattern)
-    else:
-        if dt.tzinfo:
-            return dt.astimezone(timezone).strftime(pattern)
-        else:
-            return dt.replace(tzinfo=settings.TZ).astimezone(timezone).strftime(pattern)
-
-def format_time(dt=None,pattern="%H:%M:%S",timezone=settings.TZ):
-    return format_datetime(dt=dt,pattern=pattern,timezone=timezone)
-
-def parse_time(dt,pattern="%H:%M:%S"):
-    if dt:
-        return datetime.strptime(dt,pattern).time().replace(tzinfo=settings.TZ)
-    else:
-        return ""
-
-
-
 

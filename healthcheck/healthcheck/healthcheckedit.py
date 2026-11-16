@@ -8,6 +8,7 @@ import logging
 
 from .. import settings
 from .. import utils
+from .. import timezone
 
 from .base import BaseHealthCheck,BaseServiceHealthCheckTask
 from ..locks import FileLock
@@ -47,14 +48,14 @@ class EditingHealthCheck(BaseHealthCheck):
 
     async def continuous_check(self,*args,taskcls=BaseServiceHealthCheckTask):
         await super().continuous_check(*args,taskcls=taskcls)
-        self._continuouscheck_starttime = utils.now()
+        self._continuouscheck_starttime = timezone.now()
 
     def stop_continuous_check(self):
         super().stop_continuous_check()
         self._continuouscheck_starttime = None
 
     async def _continuous_check(self,taskcls,*args):
-        if self._continuouscheck_starttime and (utils.now() - self._continuouscheck_starttime).total_seconds() > settings.EDITINGHEALTHCHECK_CONTINUOUSCHECK_MAXTIME:
+        if self._continuouscheck_starttime and (timezone.now() - self._continuouscheck_starttime).total_seconds() > settings.EDITINGHEALTHCHECK_CONTINUOUSCHECK_MAXTIME:
             #exceed the maximum time
             self.stop_continuous_check()
             return
@@ -105,7 +106,7 @@ class EditingHealthCheck(BaseHealthCheck):
             data = self.init_configs(configs)
     
             #save the publish config file
-            now = utils.now()
+            now = timezone.now()
             configdir,configfilename = os.path.split(self.healthcheck.configfile)
             configfilebase,configfileext = os.path.splitext(configfilename)
             publishedfile = os.path.join(self.healthcheck.publishhistorydir,"{1}.{0}{2}".format(now.strftime("%Y%m%dT%H%M%S"),configfilebase,configfileext))

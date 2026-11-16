@@ -17,7 +17,7 @@ from .healthcheck import HealthCheck,LastHealthCheck,SystemViewMeta,PRTGSensorMe
 from .socket import commandclient
 from . import shutdown
 from . import serializers
-from . import utils
+from . import timezone
 
 
 logger = logging.getLogger("healthcheck.healthcheckclient")
@@ -36,7 +36,7 @@ async def can_admin(request):
         return False
     try:
         perm = _permissions.get(user)
-        now = utils.now()
+        now = timezone.now()
         if not perm or (now - perm[1]).total_seconds() > settings.AUTH2_PERMCACHE_TIMEOUT:
             res = None
             async with httpx.AsyncClient(auth=(settings.AUTH2_USER,settings.AUTH2_PASSWORD),timeout=settings.AUTH2_TIMEOUT,verify=settings.AUTH2_SSLVERIFY) as client:
@@ -73,7 +73,7 @@ async def post_shutdown():
     await shutdown.shutdown()
 
 async def ping():
-    start = utils.now()
+    start = timezone.now()
     nextcheck = start + timedelta(seconds = settings.HEARTBEAT) 
     try:
         res = await commandclient.exec("healthcheck",1) 
@@ -83,7 +83,7 @@ async def ping():
         status = "red"
         msg = "Failed to ping healthcheck server. {}:{}".format(ex.__class__.__name__,str(ex))
     finally:
-        end = utils.now()
+        end = timezone.now()
     return "{}\n".format(json.dumps([["healthcheck","healthcheck"],[nextcheck,[start,end,status,msg,False ]]],cls=serializers.JSONFormater)).encode()
 
 @app.route("/healthcheck/ping")
@@ -229,7 +229,7 @@ async def delete_prtgsensor(sensorid):
 @app.route("/healthcheck/dashboard/<system>")
 async def dashboard(system):
     debug = request.args.get("debug","false").lower() == "true"
-    healthservice_nextcheck = utils.now() + timedelta(seconds=settings.HEARTBEAT + 1)
+    healthservice_nextcheck = timezone.now() + timedelta(seconds=settings.HEARTBEAT + 1)
     healthservice_nextcheck = int(healthservice_nextcheck.timestamp()) * 1000
     user = request.headers.get("X-email")
     adminable = await can_admin(request)
@@ -365,7 +365,7 @@ async def customize_dashboard(system):
     if request.method == "GET":
         healthcheckview = await healthcheck.get_view(viewkey)
 
-        return await render_template("healthcheck/customize.html",healthcheck=healthcheckview,viewkey=viewkey,system=system,user=user)
+        return await render_template("healthcheck/config_view.html",healthcheck=healthcheckview,viewkey=viewkey,system=system,user=user)
     else:
         try:
             formdata = await request.form
@@ -402,7 +402,7 @@ async def customize_dashboard(system):
             return redirect("/healthcheck/dashboard")
 
 
-@app.route("/healthcheck/admin/prtgsensor/<sensorid>",methods=["GET","POST"])
+@app.route("/healthcheck/admin/prtgsensor/<sensorid>/setting",methods=["GET","POST"])
 async def customize_prtgsensor(sensorid):
     #permission check
     editable = await can_admin(request)
@@ -525,6 +525,8 @@ async def healthcheckdetails(sectionid,serviceid,starttime):
             data = await f.read()
         return data,200,{"Content-Type":"application/json"}
     except Exception as ex:
+        pages = await service.healthcheckpages.get_pages()
+        page = pages[-1]
         return await render_template("healthcheck/healthcheckhistory.html",service=service,pages=reversed(pages),page=page,baseurl="/healthcheck",history="history",message=str(ex))
 
 @app.route("/healthcheck/admin/config/edit",methods=["GET","POST"])
@@ -590,7 +592,7 @@ async def publish_healthcheck():
             if changed:
                 await commandclient.exec("reload_healthcheck",1) 
 
-            return redirect("/healthcheck/config/publishhistories")
+            return redirect("/healthcheck/admin/config/publishhistories")
 
         except Exception as ex:
             traceback.print_exc()
@@ -649,14 +651,14 @@ async def preview_editing_healthcheck():
         msg = [str(ex)]
 
     if debug:
-        statusstreamurl = "/healthcheck/config/healthstatusstream?debug=true"
+        statusstreamurl = "/healthcheck/admin/config/healthstatusstream?debug=true"
     else:
-        statusstreamurl = "/healthcheck/config/healthstatusstream"
+        statusstreamurl = "/healthcheck/admin/config/healthstatusstream"
 
 
-    healthservice_nextcheck = utils.now() + timedelta(seconds=settings.HEARTBEAT + 1)
+    healthservice_nextcheck = timezone.now() + timedelta(seconds=settings.HEARTBEAT + 1)
     healthservice_nextcheck = int(healthservice_nextcheck.timestamp()) * 1000
-    return await render_template("healthcheck/preview.html",healthcheck=editing_healthcheck,messages=msg,healthservice_nextcheck=healthservice_nextcheck,nextcheck_timeout_delay=settings.NEXTCHECK_TIMEOUT_DELAY,nextcheck_checkinterval=settings.NEXTCHECK_CHECKINTERVAL,baseurl="/healthcheck/config",statusstreamurl=statusstreamurl,heartbeat=settings.HEARTBEAT,debug=debug)
+    return await render_template("healthcheck/preview.html",healthcheck=editing_healthcheck,messages=msg,healthservice_nextcheck=healthservice_nextcheck,nextcheck_timeout_delay=settings.NEXTCHECK_TIMEOUT_DELAY,nextcheck_checkinterval=settings.NEXTCHECK_CHECKINTERVAL,baseurl="/healthcheck/admin/config",statusstreamurl=statusstreamurl,heartbeat=settings.HEARTBEAT,debug=debug)
 
 @app.route("/healthcheck/admin/config/history/<sectionid>/<serviceid>",defaults={'pageid': ""})
 @app.route("/healthcheck/admin/config/history/<sectionid>/<serviceid>/<pageid>")
@@ -674,10 +676,10 @@ async def editinghealthcheckhistory(sectionid,serviceid,pageid):
         try:
             pageid = int(pageid)
         except:
-            return redirect("/healthcheck/config/history/{}/{}".format(sectionid,serviceid))
+            return redirect("/healthcheck/admin/config/history/{}/{}".format(sectionid,serviceid))
         page = next((p for p in pages if pageid == p.pageid),None)
         if not page:
-            return redirect("/healthcheck/config/history/{}/{}".format(sectionid,serviceid))
+            return redirect("/healthcheck/admin/config/history/{}/{}".format(sectionid,serviceid))
     elif pages:
         page = pages[-1]
     else:
@@ -686,9 +688,9 @@ async def editinghealthcheckhistory(sectionid,serviceid,pageid):
     if page and not await aiofiles.os.path.exists(page.filepath):
         #file doesn't exit, maybe deleted from disk. reload the pages 
         service.healthcheckpages.reset()
-        return redirect("/healthcheck/config/history/{}/{}".format(sectionid,serviceid))
+        return redirect("/healthcheck/admin/config/history/{}/{}".format(sectionid,serviceid))
 
-    return await render_template("healthcheck/healthcheckhistory.html",service=service,pages=reversed(pages),page=page,baseurl="/healthcheck/config",history="history")
+    return await render_template("healthcheck/healthcheckhistory.html",service=service,pages=reversed(pages),page=page,baseurl="/healthcheck/admin/config",history="history")
 
 @app.route("/healthcheck/admin/config/errorhistory/<sectionid>/<serviceid>",defaults={'pageid': ""})
 @app.route("/healthcheck/admin/config/errorhistory/<sectionid>/<serviceid>/<pageid>")
@@ -710,10 +712,10 @@ async def editinghealthcheckerrorhistory(sectionid,serviceid,pageid):
         try:
             pageid = int(pageid)
         except:
-            return redirect("/healthcheck/config/errorhistory/{}/{}".format(sectionid,serviceid))
+            return redirect("/healthcheck/admin/config/errorhistory/{}/{}".format(sectionid,serviceid))
         page = next((p for p in pages if pageid == p.pageid),None)
         if not page:
-            return redirect("/healthcheck/config/errorhistory/{}/{}".format(sectionid,serviceid))
+            return redirect("/healthcheck/admin/config/errorhistory/{}/{}".format(sectionid,serviceid))
     elif pages:
         page = pages[-1]
     else:
@@ -722,9 +724,9 @@ async def editinghealthcheckerrorhistory(sectionid,serviceid,pageid):
     if page and not await aiofiles.os.path.exists(page.filepath):
         #file doesn't exit, maybe deleted from disk. reload the pages 
         service.healthcheckpages.reset()
-        return redirect("/healthcheck/config/errorhistory/{}/{}".format(sectionid,serviceid))
+        return redirect("/healthcheck/admin/config/errorhistory/{}/{}".format(sectionid,serviceid))
 
-    return await render_template("healthcheck/healthcheckhistory.html",service=service,pages=reversed(pages),page=page,baseurl="/healthcheck/config",history="errorhistory")
+    return await render_template("healthcheck/healthcheckhistory.html",service=service,pages=reversed(pages),page=page,baseurl="/healthcheck/admin/config",history="errorhistory")
 
 @app.route("/healthcheck/admin/config/details/<sectionid>/<serviceid>/<starttime>")
 async def editinghealthcheckdetails(sectionid,serviceid,starttime):
@@ -744,7 +746,7 @@ async def editinghealthcheckdetails(sectionid,serviceid,starttime):
             data = await f.read()
         return data,200,{"Content-Type":"application/json"}
     except Exception as ex:
-        return await render_template("healthcheck/healthcheckhistory.html",service=service,pages=reversed(pages),page=page,baseurl="/healthcheck/config",history="history",message=str(ex))
+        return await render_template("healthcheck/healthcheckhistory.html",service=service,pages=reversed(pages),page=page,baseurl="/healthcheck/admin/config",history="history",message=str(ex))
 
 
 @app.route("/healthcheck/admin/config/preview/start",methods=["GET"])
@@ -786,21 +788,20 @@ async def stop_preview_editing_healthcheck():
 
 @app.route("/healthcheck/json",defaults={'system': None})
 @app.route("/healthcheck/json/<system>")
-def jsonstatus(system):
+async def jsonstatus(system):
     viewkey = system or request.headers.get("X-email")
     details = request.args.get("details") or ""
-    return healthcheck.get_view(viewkey).get_jsonstatus(details.lower() == "true"),200,{"Content-Type":"application/json"}
+    return (await healthcheck.get_view(viewkey)).get_jsonstatus(details.lower() == "true"),200,{"Content-Type":"application/json"}
 
 @app.route("/healthcheck/prtg/<sensorid>")
 async def prtg(sensorid):
     #frist to try prtg sensor
     try:
-        return healthcheck.get_prtgsensor(sensorid).get_prtgdata(),200,{"Content-Type":"application/json"}
+        return (await healthcheck.get_prtgsensor(sensorid)).get_prtgdata(),200,{"Content-Type":"application/json"}
     except:
         #second to try health checkview
         if await healthcheck.get_viewmeta(sensorid):
-            healthcheckview = await healthcheck.get_view(sensorid)
-            return healthcheckview.get_prtgdata(),200,{"Content-Type":"application/json"}
+            return (await healthcheck.get_view(sensorid)).get_prtgdata(),200,{"Content-Type":"application/json"}
     return "PRTG Sensor({}) Not Found".format(sensorid),404
 
 @app.route("/healthcheck/admin/config/healthstatusstream")

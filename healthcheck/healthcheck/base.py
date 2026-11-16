@@ -16,12 +16,13 @@ from collections import UserDict,OrderedDict
 
 from .. import checks
 
-from .healthcheckconfig import SectionHealthCheckConfig,SubrequestConfig,ServiceHealthCheckConfig
+from .healthcheckconfig import SectionHealthCheckConfig,SubrequestConfig,ServiceHealthCheckConfig,NOTEXIST
 from .healthcheckpages import HealthCheckPages
 from .. import settings
-from .. import utils
+from .. import timezone
 from .. import serializers
 from .. import shutdown
+from .. import utils
 
 logger = logging.getLogger(__name__)
 
@@ -55,27 +56,28 @@ class BaseServiceHealthCheckTask(object):
         healthcheck = self.servicehealthcheck.healthcheck
         while not healthstatus:
             attempts += 1
-            starttime = utils.now()
+            starttime = timezone.now()
             if self.servicehealthcheck.url:
                 try:
                     try:
                         res = None
                         data = None
+                        taskid = starttime.timestamp()
                         #logger.debug("{} : Start to run the healthcheck task({})".format(self.servicehealthcheck,self.__class__.__name__))
-                        async with httpx.AsyncClient(auth=self.servicehealthcheck.auth,timeout=self.servicehealthcheck.request_timeout,verify=self.servicehealthcheck.sslverify,headers=self.servicehealthcheck.headers,params=self.servicehealthcheck.queryparameters) as client:
+                        async with httpx.AsyncClient(auth=await self.servicehealthcheck.get_auth(self.servicehealthcheck,taskid),timeout=self.servicehealthcheck.request_timeout,verify=self.servicehealthcheck.sslverify,headers=await self.servicehealthcheck.get_requestheaders(self.servicehealthcheck,taskid),params=await self.servicehealthcheck.get_requestparameters(self.servicehealthcheck,taskid)) as client:
                             if self.servicehealthcheck.method == "GET":
                                 res = await client.get(self.servicehealthcheck.url)
                             elif self.servicehealthcheck.method == "POST":
-                                res = await client.post(self.servicehealthcheck.url,data=self.servicehealthcheck.formdata)
+                                res = await client.post(self.servicehealthcheck.url,json=await self.servicehealthcheck.get_requestformdata(self.servicehealthcheck,taskid))
                             elif self.servicehealthcheck.method == "PUT":
-                                res = await client.put(self.servicehealthcheck.url,data=self.servicehealthcheck.formdata)
+                                res = await client.put(self.servicehealthcheck.url,json=await self.servicehealthcheck.get_requestformdata(self.servicehealthcheck,taskid))
                             elif self.servicehealthcheck.method == "DELETE":
                                 res = await client.delete(self.servicehealthcheck.url)
                             else:
                                 #Not support
                                 raise Exception("Http method({}) Not Support".format(self.method))
                     finally:
-                        endtime = utils.now()
+                        endtime = timezone.now()
                         processtime = (endtime - starttime).total_seconds() * 1000
         
                     healthstatus = healthcheck.check_response(self.servicehealthcheck,res,attempts,processtime)
@@ -97,13 +99,14 @@ class BaseServiceHealthCheckTask(object):
                     else:
                         healthstatus = healthcheck.populate_healthstatus(self.servicehealthcheck,"red","httpx.{1}: {2}. No time to try again. Attempts={0}".format(attempts,ex.__class__.__name__,str(ex)),attempts,processtime)
                 except Exception as ex:
+                    #traceback.print_exc()
                     if ex.__class__.__module__ == "builtins":
                         healthstatus = healthcheck.populate_healthstatus(self.servicehealthcheck,"error","{1}: {2}. Attempts={0}".format(attempts,ex.__class__.__name__,str(ex)),attempts,processtime)
                     else:
                         healthstatus = healthcheck.populate_healthstatus(self.servicehealthcheck,"error","{1}.{2}: {3}. Attempts={0}".format(attempts,ex.__class__.__module__,ex.__class__.__name__,str(ex)),attempts,processtime)
             else:
                 healthstatus = ["green","OK",None]
-                endtime = utils.now()
+                endtime = timezone.now()
 
         healthstatus.insert(0,starttime)
         healthstatus.insert(1,endtime)
@@ -115,7 +118,7 @@ class BaseServiceHealthCheckTask(object):
         try:
             await self.servicehealthcheck.save_checkingstatus(healthstatus,res,attempts)
         except Exception as ex:
-            traceback.print_exc()
+            #traceback.print_exc()
             logger.error("Failed to save the healthcheck status details({2}) of service({0}.{1}). {3}: {4}".format(self.servicehealthcheck.sectionid,self.servicehealthcheck.id,healthstatus,ex.__class__.__name__,str(ex)))
 
         try:
@@ -129,7 +132,7 @@ class BaseServiceHealthCheckTask(object):
 
 class JsonStatusMixin(object):
     def get_jsonstatus(self,details=False):
-        now = utils.now()
+        now = timezone.now()
         data = {}
         for section in self.healthchecksections:
             sectiondata = {}
@@ -165,7 +168,7 @@ class PRTGMixin(object):
         data = {"error":0,"result":[],"text":"All checks passed"}
         failed_services = []
         warning_services = []
-        now = utils.now()
+        now = timezone.now()
         servicecritical = {}
         for section in self.healthchecksections:
             if not section.enabled:
@@ -224,39 +227,150 @@ class PRTGMixin(object):
 
         return {"prtg":data}
 
+class Subrequest(SubrequestConfig):
+    def __init__(self,healthcheck,section,configindex,data):
+        super().__init__(healthcheck,section,configindex,data)
+        self._values = {}
+        self._expireat = None
+        self._service = None
+        self._taskid = None
+
+    async def get_value(self,service,taskid,prop):
+        starttime = timezone.now()
+        if not self._values  or ((self._expireat is None or starttime >= self._expireat) and (self._service is not  service or self._taskid != taskid)):
+            self._values.clear()
+            self._expireat = None
+            self._service = None
+            self._taskid = None
+
+            try:
+                res = None
+                data = None
+                #logger.debug("{} : Send the subrequest({}) to get the value of property({})".format(self.id,self.url,prop))
+                async with httpx.AsyncClient(auth=await self.get_auth(service,taskid),timeout=self.request_timeout,verify=self.sslverify,headers=await self.get_requestheaders(service,taskid),params=await self.get_requestparameters(service,taskid)) as client:
+                    if self.method == "GET":
+                        res = await client.get(self.url)
+                    elif self.method == "POST":
+                        res = await client.post(self.url,data=await self.get_requestformdata(service,taskid))
+                    elif self.method == "PUT":
+                        res = await client.put(self.url,data=await self.get_requestformdata(service,taskid))
+                    elif self.method == "DELETE":
+                        res = await client.delete(self.url)
+                    else:
+                        #Not support
+                        raise Exception("Http method({}) Not Support".format(self.method))
+
+                #populate the data from response
+                found = False
+                for checkconditions,valuesmap,transforms in self["values"]:
+                    #transform the response
+                    #transformed response should be compatible with the original response
+                    if transforms:
+                        for transform in transforms:
+                            res = transform(res)
+
+                    checkresult =  checks.check(res,checkconditions)
+                    if not checkresult:
+                        continue
+                    for k,f in valuesmap.items():
+                        self._values[k] = f(res)
+                    found = True
+
+                if not found:
+                    raise Exception("Faild to find the matched condition for the response({}:{})".format(res.status_code,res.text))
+                
+                if self._values.get("expireat"):
+                    if isinstance(self._values["expireat"],datetime):
+                        self._expireat = self._values["expireat"] - self.expirebuffer
+                    else:
+                        self._expireat = timezone.parse(self._values["expireat"],pattern=self._values.get("expireat_pattern"),timezone=self._values.get("expireat_tz")) - self.expirebuffer
+                elif self._values.get("expireat_timestamp"):
+                    self._expireat = timezone.fromtimestamp(float(self._values["expireat_timestamp"]),tz=self._values.get("expireat_tz")) - self.expirebuffer
+                elif self._values.get("expire"):
+                    if self._values.get("expire_unit"):
+                        if self._values["expire_unit"] == "s":
+                            self._expireat = starttime + timedelta(seconds=float(self._values["expire"])) - self.expirebuffer
+                        elif self._values["expire_unit"] == "ms":
+                            self._expireat = starttime + timedelta(milliseconds=float(self._values["expire"])) - self.expirebuffer
+                        elif self._values["expire_unit"] == "m":
+                            self._expireat = starttime + timedelta(minutes=float(self._values["expire"])) - self.expirebuffer
+                        elif self._values["expire_unit"] == "h":
+                            self._expireat = starttime + timedelta(hours=float(self._values["expire"])) - self.expirebuffer
+                        elif self._values["expire_unit"] == "d":
+                            self._expireat = starttime + timedelta(days=float(self._values["expire"])) - self.expirebuffer
+                        else:
+                            raise Exception("Timeunit({}) Not Support".format(self._values["expire_unit"]))
+                    else:
+                        self._expireat = starttime + timedelta(seconds=int(self._values["expire"])) - self.expirebuffer
+                else:
+                    self._expireat = None
+
+                self._service = service
+                self._taskid = taskid
+                
+            except Exception as ex:
+                raise Exception("Failed to populate the data from response.{}({})".format(ex.__class__.__name__,str(ex)))
+        else:
+            #logger.debug("{} : Reuse the value of property({}) fetched from the previous request".format(self.url,prop))
+            pass
+
+        return self._values.get(prop)
+
 class ServiceHealthCheck(ServiceHealthCheckConfig):
     def __init__(self,healthcheck,section,configindex,data):
         super().__init__(healthcheck,section,configindex,data)
         self.healthcheckpages = HealthCheckPages.get_instance(self)
 
-    _last_greenhealthcheck = "__NULL__"
-    async def get_last_greenhealthcheck(self):
-        if self._last_greenhealthcheck == "__NULL__": 
+    _basedir = None
+    @property
+    def basedir(self):
+        if not self._basedir:
+            self._basedir = os.path.join(self.section.basedir,self.id)
+
+        return self._basedir
+
+    _last_greenhealthcheck = NOTEXIST
+    async def load_last_greenhealthcheck(self):
+        if self._last_greenhealthcheck is NOTEXIST: 
             self._last_greenhealthcheck = await self.healthcheckpages.get_last_greenhealthcheck()
+
+    @property
+    def last_greenhealthcheck(self):
         return self._last_greenhealthcheck
 
-    _last_yellowhealthcheck = "__NULL__"
-    async def get_last_yellowhealthcheck(self):
-        if self._last_yellowhealthcheck == "__NULL__": 
+    _last_yellowhealthcheck = NOTEXIST
+    async def load_last_yellowhealthcheck(self):
+        if self._last_yellowhealthcheck is NOTEXIST: 
             self._last_yellowhealthcheck = await self.healthcheckpages.get_last_yellowhealthcheck()
+
+    @property
+    def last_yellowhealthcheck(self):
         return self._last_yellowhealthcheck
 
-    _last_greenyellowhealthcheck = "__NULL__"
-    async def get_last_greenyellowhealthcheck(self):
-        if self._last_greenyellowhealthcheck == "__NULL__": 
+    _last_greenyellowhealthcheck = NOTEXIST
+    async def load_last_greenyellowhealthcheck(self):
+        if self._last_greenyellowhealthcheck is NOTEXIST: 
             self._last_greenyellowhealthcheck = await self.healthcheckpages.get_last_greenyellowhealthcheck()
+
+    @property
+    def last_greenyellowhealthcheck(self):
         return self._last_greenyellowhealthcheck
 
-    _last_redhealthcheck = "__NULL__"
-    async def get_last_redhealthcheck(self):
-        if self._last_redhealthcheck == "__NULL__": 
+    _last_redhealthcheck = NOTEXIST
+    async def load_last_redhealthcheck(self):
+        if self._last_redhealthcheck is NOTEXIST: 
             self._last_redhealthcheck = await self.healthcheckpages.get_last_redhealthcheck()
+
+    @property
+    def last_redhealthcheck(self):
         return self._last_redhealthcheck
 
-    _last_errorhealthcheck = "__NULL__"
-    async def get_last_errorhealthcheck(self):
-        if self._last_errorhealthcheck == "__NULL__": 
+    _last_errorhealthcheck = NOTEXIST
+    async def load_last_errorhealthcheck(self):
+        if self._last_errorhealthcheck is NOTEXIST: 
             self._last_errorhealthcheck = await self.healthcheckpages.get_last_errorhealthcheck()
+
+    def last_errorhealthcheck(self):
         return self._last_errorhealthcheck
 
     @property
@@ -349,15 +463,13 @@ class ServiceHealthCheck(ServiceHealthCheckConfig):
         status = self.get("healthstatus")
         return status[1][1].strftime("%Y-%m-%dT%H:%M:%S.%f") if status and status[1] else ""
 
-
-    def get_currentinterval_starttime(self,nextchecktime=None):
-        offset = self.offset
-        return (nextchecktime or self.healthstatus_nextchecktime) - timedelta(seconds=offset + self.interval)
+    async def clean_zombiefiles(self):
+        await self.healthcheckpages.clean_zombiefiles()
 
     def get_nextchecktime(self,last_checkingtime,now=None,today=None,tomorrow=None,seconds_in_day=None):
         offset = self.offset
         if not now:
-            now = utils.now()
+            now = timezone.now()
             today = datetime(year = now.year,month=now.month,day=now.day,tzinfo=settings.TZ)
             tomorrow = today + timedelta(days=1)
             seconds_in_day = int((now - today).total_seconds())
@@ -405,22 +517,20 @@ class ServiceHealthCheck(ServiceHealthCheckConfig):
                 "request": {
                     "url": self.url,
                     "method": self.method,
-                    "sslverify" :self.sslverify,
-                    "user": self.user
-
+                    "sslverify" :self.sslverify
                 },
                 "healthstatus":healthstatus,
             }
             if attempts > 1:
                 details["request"]["attempts"] = attempts
-            if self.headers:
-                details["request"]["headers"] = self.headers
+            if self.fixedheaders:
+                details["request"]["headers"] = self.fixedheaders
     
             if self.timeout:
                 details["request"]["timeout"] = self.timeout
     
             if self.method in ("POST","PUT"):
-                details["request"]["data"] = self.formdata
+                details["request"]["data"] = self.fixedformdata
     
             if res:
                 try:
@@ -450,12 +560,45 @@ class ServiceHealthCheck(ServiceHealthCheckConfig):
     async def load_checkinghistory(self):
         last_healthcheck = await self.healthcheckpages.get_last_healthcheck()
 
+        #load dependent async properties
+        for prop in self.dependent_async_properties:
+            await getattr(self,"load_".format(prop))()
+
         next_checktime = self.get_nextchecktime(last_healthcheck[0] if last_healthcheck else None)
         self.healthstatus = [next_checktime,last_healthcheck,False] 
 
 class SectionHealthCheck(SectionHealthCheckConfig):
     SERVICEHEALTHCHECK_CLS = ServiceHealthCheck
-    pass
+    SUBREQUEST_CLS = Subrequest
+
+
+    _basedir = None
+    @property
+    def basedir(self):
+        if not self._basedir:
+            self._basedir = os.path.join(self.healthcheck.basedir,self.id)
+
+        return self._basedir
+
+    async def clean_zombiefiles(self):
+        """
+        Clean the data files which are expired or not generated by healthcheck
+        """
+        servicefolders = set()
+        for service in self["services"].values():
+            servicefolders.add(service.basedir)
+            await service.clean_zombiefiles()
+
+        for f in await aiofiles.os.listdir(self.basedir):
+            path = os.path.join(self.basedir,f)
+            if path not in servicefolders:
+                #this path is not for any section
+                if await aiofiles.os.path.isfile(path):
+                    logger.info("{}: Delete the file({}) which is not belonging to healthcheck".format(self,path))
+                    await utils.removefile(path)
+                else:
+                    logger.info("{}: Delete the folder({}) which is not belonging to healthcheck".format(self,path))
+                    await utils.deletedir(path)
 
 class BaseHealthCheck(PRTGMixin,JsonStatusMixin):
     configfile = None
@@ -479,7 +622,7 @@ class BaseHealthCheck(PRTGMixin,JsonStatusMixin):
 
     @property
     def healthchecksections(self):
-        return self.sections.values() if self.sections else []
+        return filter(lambda section: section.enabledservices > 0,self.sections.values()) if self.sections else []
 
     def get_service(self,section,service):
         return self.sections.get(section,{}).get("services",{}).get(service)
@@ -488,7 +631,39 @@ class BaseHealthCheck(PRTGMixin,JsonStatusMixin):
         """
         Get the request object if found;otherwise return None
         """
-        return self.sections.get(section,{}).get("subrequests",{}).get(request)
+        if self.sections:
+            return self.sections.get(section,{}).get("subrequests",{}).get(request)
+        else:
+            return None
+
+    _basedir = None
+    @property
+    def basedir(self):
+        if not self._basedir:
+            self._basedir = os.path.join(settings.HEALTHCHECK_DATA_DIR,os.path.splitext(os.path.basename(self.configfile))[0])
+
+        return self._basedir
+
+    async def clean_zombiefiles(self):
+        """
+        Clean the data files which are expired or not generated by healthcheck
+        """
+        sectionfolders = set()
+        for section in self.sections.values():
+            sectionfolders.add(section.basedir)
+            await section.clean_zombiefiles()
+
+        for f in await aiofiles.os.listdir(self.basedir):
+            path = os.path.join(self.basedir,f)
+            if path not in sectionfolders:
+                #this path is not for any section
+                if await aiofiles.os.path.isfile(path):
+                    logger.info("{}: Delete the file({}) which is not belonging to healthcheck".format(self,path))
+                    await utils.removefile(path)
+                else:
+                    logger.info("{}: Delete the folder({}) which is not belonging to healthcheck".format(self,path))
+                    await utils.deletedir(path)
+
 
     async def reload(self):
         """
@@ -502,7 +677,7 @@ class BaseHealthCheck(PRTGMixin,JsonStatusMixin):
             return False
 
         #migrate the current healthcheck status from previous healthcheck objects to new healtcheck objects
-        now = utils.now()
+        now = timezone.now()
         today = datetime(year = now.year,month=now.month,day=now.day,tzinfo=settings.TZ)
         tomorrow = today + timedelta(days=1)
         seconds_in_day = int((now - today).total_seconds())
@@ -510,24 +685,37 @@ class BaseHealthCheck(PRTGMixin,JsonStatusMixin):
             for service in section.healthcheckservices:
                 existing_service = sections.get(section.id,{}).get("services",{}).get(service.id)
                 next_checktime = today + timedelta(seconds=seconds_in_day - (seconds_in_day % service.interval))
-                if existing_service and existing_service.healthstatus:
-                    service.healthstatus = existing_service.healthstatus
-                    if service.healthstatus[0] < next_checktime:
-                        service.healthstatus[0] = next_checktime
-                    else:
-                        next_checktime += timedelta(seconds=service.interval)
-                        if next_checktime  >= tomorrow:
-                            service.healthstatus[0] = tomorrow
-                        else:
-                            service.healthstatus[0] = next_checktime
-                else:
-                    service.healthstatus = [next_checktime,None,False] 
                 if existing_service:
+                    if existing_service.healthstatus:
+                        service.healthstatus = existing_service.healthstatus
+                        if service.healthstatus[0] < next_checktime:
+                            service.healthstatus[0] = next_checktime
+                        else:
+                            next_checktime += timedelta(seconds=service.interval)
+                            if next_checktime  >= tomorrow:
+                                service.healthstatus[0] = tomorrow
+                            else:
+                                service.healthstatus[0] = next_checktime
+
                     service._last_greenhealthcheck = existing_service._last_greenhealthcheck
                     service._last_yellowhealthcheck = existing_service._last_yellowhealthcheck
                     service._last_greenyellowhealthcheck = existing_service._last_greenyellowhealthcheck
                     service._last_redhealthcheck = existing_service._last_redhealthcheck
                     service._last_errorhealthcheck = existing_service._last_errorhealthcheck
+
+                else:
+                    await service.load_checkinghistory()
+
+        #remove the data files for removed sections and services
+        for existing_section in sections.values():
+            if existing_section.id not in self.sections:
+                #removed 
+                asyncio.create_task(utils.deletedir(existing_section.basedir))
+                continue
+            for existing_service in existing_section.get("services",{}).values():
+                if existing_service.id not in self.sections[existing_section.id]["services"]:
+                    #removed
+                    asyncio.create_task(utils.deletedir(existing_service.basedir))
 
         return True
 
@@ -560,7 +748,7 @@ class BaseHealthCheck(PRTGMixin,JsonStatusMixin):
                 return False
 
             self.config_hashcode = config_hashcode
-            self.sections = self.init_configs(json.loads(configs.decode()))
+            self.init_configs(json.loads(configs.decode()))
             return True
         except Exception as ex:
             traceback.print_exc()
@@ -576,7 +764,7 @@ class BaseHealthCheck(PRTGMixin,JsonStatusMixin):
 
     def init_configs(self,configs):
         #initialize the configs
-        now = utils.now()
+        now = timezone.now()
         today = datetime(year = now.year,month=now.month,day=now.day,tzinfo=settings.TZ)
         tomorrow = today + timedelta(days=1)
         seconds_in_day = int((now - today).total_seconds())
@@ -586,7 +774,7 @@ class BaseHealthCheck(PRTGMixin,JsonStatusMixin):
         if not isinstance(configs,(list,tuple)):
             raise Exception("Healthcheck configurations should be a list object.{}".format(configs))
 
-        sections = OrderedDict()
+        self.sections = OrderedDict()
         #add a fake service for healthcheck heartbeat
         heartbeat = SectionHealthCheck(self,-1,{
             "id": "Healthcheck",
@@ -611,28 +799,12 @@ class BaseHealthCheck(PRTGMixin,JsonStatusMixin):
                 "checkingtime":None
             }]
         })
-        sections[heartbeat.id] = heartbeat
        
         sectionindex = 0
         for config in configs:
             sectionindex += 1
-            section = SectionHealthCheck(self,sectionindex,config)
-            sections[section.id] = section
+            SectionHealthCheck(self,sectionindex,config)
             
-        return sections
-
-    async def check(self,runner,taskcls,*args):
-        if not self._checkingstatus_loaded:
-            await self.load_checkingstatus()
-
-        for section in self.sections.values():
-            if not section.enabled:
-                continue
-            for service in section["services"].values():
-                if not service.enabled:
-                    continue
-                runner.add_task(taskcls(service,*args))
-
     def _schedule_continuous_check(self,taskcls,*args):
         shutdown.unregister_scheduled_task(self._continuous_check_task)
         self._continuous_check_task = asyncio.create_task(self._continuous_check(taskcls,*args))
@@ -657,7 +829,7 @@ class BaseHealthCheck(PRTGMixin,JsonStatusMixin):
             #already stopped
             return
 
-        now = utils.now()
+        now = timezone.now()
         today = datetime(year = now.year,month=now.month,day=now.day,tzinfo=settings.TZ)
         tomorrow = today + timedelta(days=1)
         seconds_in_day = int((now - today).total_seconds())
@@ -677,10 +849,16 @@ class BaseHealthCheck(PRTGMixin,JsonStatusMixin):
                         next_checktime = now + timedelta(seconds=5)
                     else:
                         #the healthcheck of this service is not running
-                        logger.debug("{} : Run a task to check the service({}.{}.lastchecktime = {}, next checktime={})  to task runner.".format(self,service.sectionid,service.id,service.healthstatus_nextcheck,service.get_nextchecktime(service.healthstatus_nextchecktime,now,today,tomorrow,seconds_in_day)))
-                        service.healthstatus_running = True
-                        task = taskcls(service,*args)
                         next_checktime = service.get_nextchecktime(service.healthstatus_nextchecktime,now,today,tomorrow,seconds_in_day)
+                        logger.debug("{} : Run a task to check the service({}.{}.lastchecktime = {}, next checktime={})  to task runner.".format(self,service.sectionid,service.id,service.healthstatus_nextcheck,next_checktime))
+                        service.healthstatus_running = True
+                        if service.offset:
+                            service["interval_start"] = service.healthstatus_nextchecktime - timedelta(seconds=service.interval + service.offset)
+                            service["interval_end"] = service.healthstatus_nextchecktime - timedelta(seconds=service.offset)
+                        else:
+                            service["interval_start"] = service.healthstatus_nextchecktime - timedelta(seconds=service.interval)
+                            service["interval_end"] = service.healthstatus_nextchecktime
+                        task = taskcls(service,*args)
                         #set the nextchecktime
                         service.healthstatus_nextchecktime = next_checktime
                         #create a task to run the healthcheck
@@ -697,7 +875,7 @@ class BaseHealthCheck(PRTGMixin,JsonStatusMixin):
         if not self._next_runtime:
             self._next_runtime = now + timedelta(seconds=30)
 
-        seconds = (self._next_runtime - utils.now()).total_seconds()
+        seconds = (self._next_runtime - timezone.now()).total_seconds()
         if seconds > 0:
             logger.debug("Waiting {} seconds to begin the next batch of service health check.".format(seconds))
             self._continuous_check_task = asyncio.get_running_loop().call_later(seconds,self._schedule_continuous_check,taskcls,*args)
@@ -815,4 +993,6 @@ class BaseHealthCheck(PRTGMixin,JsonStatusMixin):
             healthstatus[1] = "{1}. Attempts:{0}".format(attempts,healthstatus[1])
     
         return healthstatus
+
+
 

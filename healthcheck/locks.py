@@ -5,6 +5,7 @@ import os
 import aiofiles
 
 from . import utils
+from . import timezone
 
 class FileLock(object):
     def __init__(self,file):
@@ -19,7 +20,7 @@ class FileLock(object):
             fcntl.flock(self._fd.fileno(),fcntl.LOCK_EX)
         except FileNotFoundError as ex:
             await utils.makedir(os.path.dirname(self.file))
-            await beself.lock()
+            await self.lock()
 
 
     async def release(self):
@@ -43,13 +44,13 @@ class FileLock(object):
         return False if exc_type else True
 
 async def test(f,seconds):
-    print("{}: Begin to acquire the lock({})".format(utils.format_datetime(),f))
+    print("{}: Begin to acquire the lock({})".format(timezone.format_datetime(),f))
     async with FileLock(f) as lck:
-        print("{}: Acquire the lock({}),begin to perform the task".format(utils.format_datetime(),f))
+        print("{}: Acquire the lock({}),begin to perform the task".format(timezone.format_datetime(),f))
         await asyncio.sleep(seconds)
-        print("{}: End to perform the task, release the lock".format(utils.format_datetime()))
+        print("{}: End to perform the task, release the lock".format(timezone.format_datetime()))
 
-    print("{}: Lock({}) released".format(utils.format_datetime(),f))
+    print("{}: Lock({}) released".format(timezone.format_datetime(),f))
 
 
 if __name__ == '__main__':

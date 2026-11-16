@@ -36,9 +36,10 @@
           <td>{{defaultview.description}}</td>
           <td style="width:300px">
               {% if can_admin %}
-              <A href="/healthcheck/customize">Config</A> | 
+              <A href="/healthcheck/customize">Setting</A> | 
               {% endif %}
-              <A href="/healthcheck/dashboard">View</A>
+              <A href="/healthcheck/json" target="_jsondata">JSON</A> | 
+              <A href="/healthcheck/dashboard">Dashboard</A>
           </td>
       </tr>
       {% for view in systemviews %}
@@ -50,8 +51,9 @@
               {% if can_admin %}
               <A href="/healthcheck/admin/systemview/{{view.id}}">Edit</A> | 
               <A href="/healthcheck/admin/systemview/{{view.id}}/delete">Delete</A> | 
-              <A href="/healthcheck/admin/systemview/{{view.id}}/setting">Config</A> | 
+              <A href="/healthcheck/admin/systemview/{{view.id}}/setting">Setting</A> | 
               {% endif %}
+              <A href="/healthcheck/json/{{view.id}}" target="_jsondata">JSON</A> | 
               <A href="/healthcheck/prtg/{{view.id}}" target="_prtgdata">PRTG</A> | 
               <A href="/healthcheck/dashboard/{{view.id}}">Dashboard</A> 
           </td>
@@ -81,7 +83,7 @@
               {% if can_admin %}
               <A href="/healthcheck/admin/prtgsensor/{{sensor.id}}">Edit</A> | 
               <A href="/healthcheck/admin/prtgsensor/{{sensor.id}}/delete">Delete</A> | 
-              <A href="/healthcheck/admin/prtgsensor/{{sensor.id}}/setting">Config</A> | 
+              <A href="/healthcheck/admin/prtgsensor/{{sensor.id}}/setting">Setting</A> | 
               {% endif %}
               <A href="/healthcheck/prtg/{{sensor.id}}" target="_prtgdata">PRTG</A>
           </td>

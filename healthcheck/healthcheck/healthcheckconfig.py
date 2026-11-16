@@ -1,4 +1,6 @@
 import re
+import os
+import json
 import traceback
 import logging
 import httpx
@@ -11,9 +13,11 @@ from collections import UserDict,OrderedDict
 
 from .. import checks
 from .. import settings
-from .. import utils
+from .. import timezone
 
 logger = logging.getLogger(__name__)
+
+NOTEXIST = object()
 
 class ConfigError(Exception):
     """Base exception for configuration errors."""
@@ -47,16 +51,17 @@ RESERVED_PRTG_CHANNELNAME = {
 }
 
 def format_template_factory(template,args):
-    async def _func(service):
+    is_async = any( (callable(arg) and inspect.iscoroutinefunction(arg)) for arg in args)
+
+    async def _afunc(service,taskid):
         if isinstance(args,list):
             data = []
             for arg in args:
                 if callable(arg):
-                    data.append(arg(service))
                     if inspect.iscoroutinefunction(arg):
-                        data.append(await arg(service))
+                        data.append(await arg(service,taskid))
                     else:
-                        data.append(arg(service))
+                        data.append(arg(service,taskid))
                 else:
                     data.append(arg)
             return template.format(*data)
@@ -65,42 +70,64 @@ def format_template_factory(template,args):
             for k,v in args.items():
                 if callable(v):
                     if inspect.iscoroutinefunction(v):
-                        data[k] = await v(service)
+                        data[k] = await v(service,taskid)
                     else:
-                        data[k] = v(service)
+                        data[k] = v(service,taskid)
                 else:
                     data[k] = v
             return template.format(**data)
 
-    return _func
+    def _func(service,taskid):
+        if isinstance(args,list):
+            data = []
+            for arg in args:
+                if callable(arg):
+                    data.append(arg(service,taskid))
+                else:
+                    data.append(arg)
+            return template.format(*data)
+        else:
+            data = {}
+            for k,v in args.items():
+                if callable(v):
+                    data[k] = v(service,taskid)
+                else:
+                    data[k] = v
+            return template.format(**data)
 
-def get_datetime_factory(time,offset,timezone,pattern):
+    return _afunc if is_async else _func
+
+def get_datetime_factory(time,offset,tz,pattern):
     """
     time: only support 'now', 'interval_start' and 'interval_end'
     Format the specified time with specified timezone and pattern
     """
-    if timezone == "UTC":
-        timezone = UTC
-    else:
-        timezone = ZoneInfo(timezone)
+    if isinstance(tz,str):
+        if tz == "UTC":
+            tz = UTC
+        else:
+            tz = ZoneInfo(z)
 
-    def _func(service):
+    def _func(service,taskid):
         if time == "now":
-            dt = utils.now()
+            dt = timezone.now()
         elif time == "interval_start":
-            dt = service.get_currentinterval_starttime()
+            dt = service.interval_start
         elif time == "interval_end":
-            dt = service.get_currentinterval_starttime() + timedelta(seconds=service.interval)
+            dt = service.interval_end
         else:
             raise Exception("Time({}) Not Support".format(time))
 
-        return utils.format_time(dt,pattern=pattern,timezone=timezone)
+        if offset:
+            dt += timedelta(seconds=offset)
+
+        return timezone.format_time(dt,pattern=pattern,tz=tz)
 
     return _func
 
 def get_request_value_factory(request,prop="value"):
-    async def _func(service):
-        return request.get_value(prop)
+    async def _func(service,taskid):
+        return await request.get_value(service,taskid,prop)
 
     return _func
 
@@ -123,6 +150,8 @@ class SectionHealthCheckConfig(UserDict):
             
         if not self.get("services") and not self.get("subrequests"):
             raise ConfigError("Section {}({}): No services and subrequests are configured".format(self.sectionindex,self.id))
+
+        self.healthcheck.sections[self.id] = self
 
         self["name"] = self.get("name") or self.id
 
@@ -175,7 +204,8 @@ class SectionHealthCheckConfig(UserDict):
             raise ConfigError("Section {}({}): The proprety 'interval'({}) is not an integer.".format(self.sectionindex,self.id,interval))
         self["interval"] = interval
 
-        #init timeout to seconds
+        #timeout is configured as milliseconds
+        #init timeout to seconds. 
         #if not configured,set it to settings.HEALTHCHECKSERVICE_TIMEOUT
         timeout = self.get("timeout")
         try:
@@ -221,7 +251,7 @@ class SectionHealthCheckConfig(UserDict):
             if retryinterval <= 0:
                 retryinterval = settings.HEALTHCHECKSERVICE_RETRY_INTERVAL
         except Exception as ex:
-            raise ConfigError("Section {}({}): The property 'retry_interval'({}) is not an integer.".format(self.sectionindex,self.id,retry_interval))
+            raise ConfigError("Section {}({}): The property 'retry_interval'({}) is not an integer.".format(self.sectionindex,self.id,retryinterval))
         self["retry_interval"] = retryinterval
 
         method = self.get("method")
@@ -337,114 +367,40 @@ class SectionHealthCheckConfig(UserDict):
             prtgconfigs = RESERVED_PRTG_CHANNELS
         self["prtg"] = prtgconfigs
 
+        subrequests = {}
+        subrequestindex = 0
+        for subrequest in self.get("subrequests",[]):
+            subrequestindex += 1
+            subrequest = self.SUBREQUEST_CLS(self.healthcheck,self,subrequestindex,subrequest)
+            subrequests[subrequest.id] = subrequest
+
+        self["subrequests"] = subrequests
+
         services = OrderedDict()
         serviceindex = 0
+        enabledservices = 0
         for service in self["services"]:
             serviceindex += 1
             service = self.SERVICEHEALTHCHECK_CLS(self.healthcheck,self,serviceindex,service)
             if service.url and not service["healthchecks"]:
                 continue
             services[service.id] = service
+            if service.enabled:
+                enabledservices += 1
+
+        if self.enabled:
+            self["enabledservices"] = enabledservices
+        else:
+            self["enabledservices"] = 0
 
         self["services"] = services
 
-
-    @property
-    def id(self):
-        return self["id"]
-
-    @property
-    def name(self):
-        return self["name"]
-
-    @property
-    def baseurl(self):
-        """
-        Can be None
-        """
-        return self["baseurl"]
-
-    @property
-    def enabled(self):
-        return self["enabled"]
-
-    @property
-    def checkingtime(self):
-        """
-        Reuturn None if not configration, or can check all day; Otherwise, return a list of time range[start check time(seconds in the day),end check time (seconds in the day),start check time(str),end check time(str)]
-        """
-        return self["checkingtime"]
-
-    @property
-    def offset(self):
-        """
-        An integer
-        Default is 0
-        """
-        return self["offset"]
+    def __getattr__(self,attr):
+        return self.get(attr)
 
     @property
     def headers(self):
         return self.get("headers") or {}
-
-    @property
-    def interval(self):
-        """
-        seconds or None
-        """
-        return self["interval"]
-
-    @property
-    def timeout(self):
-        """
-        Seconds
-        Default is settings.HEALTHCHECKSERVICE_TIMEOUT
-        """
-        return self["timeout"]
-
-    @property
-    def retry(self):
-        """
-        Integer
-        Default is settings.HEALTHCHECKSERVICE_RETRY
-        """
-        return self["retry"]
-
-    @property
-    def retry_interval(self):
-        """
-        Already converted to seconds
-        Default is settings.HEALTHCHECKSERVICE_RETRY_INTERVAL
-        """
-        return self["retry_interval"]
-
-    @property
-    def user(self):
-        """
-        Can be None
-        """
-        return self.get("user")
-
-    @property
-    def password(self):
-        """
-        Can be None
-        """
-        return self.get("password")
-
-    @property
-    def method(self):
-        """
-        Default is GET
-        """
-        return self["method"]
-
-    @property
-    def formdata(self):
-        """
-        Can be None
-        """
-        return self.get("data")
 
     @property
     def queryparameters(self):
@@ -453,41 +409,6 @@ class SectionHealthCheckConfig(UserDict):
         """
         return self.get("queryparameters") or {}
 
-    @property
-    def sslverify(self):
-        return self["sslverify"]
-
-    @property
-    def historyexpire(self):
-        """
-        Default is 0
-        """
-        return self["historyexpire"]
-
-    @property
-    def errorhistoryexpire(self):
-        """
-        Default is 0
-        """
-        return self["errorhistoryexpire"]
-
-    @property
-    def healthdetailpersistent(self):
-        """
-        Default is ["yellow","red","error"])
-        """
-        return self["healthdetailpersistent"]
-
-    @property
-    def prtg(self):
-        """
-        At least have reserved prtg channels
-        """
-        return self["prtg"]
-
-    @property
-    def services(self):
-        return self["services"]
 
     @property
     def healthcheckservices(self):
@@ -496,6 +417,9 @@ class SectionHealthCheckConfig(UserDict):
     @property
     def prtgenabled(self):
         return any(s.prtgenabled for s in self.healthcheckservices)
+
+    def __str__(self):
+        return "{}.{}".format(self.healthcheck,self.sectionid)
 
 class RequestConfig(UserDict):
     def __init__(self,healthcheck,section,configindex,data):
@@ -527,6 +451,7 @@ class RequestConfig(UserDict):
                     offset_unit = m.group("offset_unit") or "s"
                     if offset:
                         #convert to seconds
+                        offset = int(offset)
                         if offset_unit == "d":
                             offset *= 86400 
                         elif offset_unit == "h":
@@ -542,11 +467,13 @@ class RequestConfig(UserDict):
                 m = self.request_re.search(arg)
                 if m:
                     #dynamic value extract from http response
-                    section = m.group("section") or self.sectionid
+                    section = m.group("sector") or self.sectionid
                     request = self.healthcheck.get_subrequest(section,m.group("request"))
                     prop = m.group("prop") or "value"
                     if request:
                         return get_request_value_factory(request,prop)
+                    else:
+                        raise Exception("Failed to find the subrequest({1}) in sector({0})".format(section,m.group("request")))
             return arg
         else:
             return arg
@@ -560,7 +487,7 @@ class RequestConfig(UserDict):
                 #is a dyanmic value
                 if data.get("__args__"):
                     #template string
-                    if isinstance(data,list):
+                    if isinstance(data["__args__"],list):
                         for i in range(len(data["__args__"])):
                             data["__args__"][i] = self._init_data_arg(data["__args__"][i])
                     else:
@@ -605,10 +532,21 @@ class RequestConfig(UserDict):
 
         if "user" not in self:
             self["user"] = self.section.user
+
+        if self["user"]:
+            self["user"] = self._init_data(self["user"])
     
         if "password" not in self:
             self["password"] = self.section.password
     
+        if self["password"]:
+            self["password"] = self._init_data(self["password"])
+
+        if callable(self["user"]) or callable(self["password"]):
+            self["dynamicauth"] = True
+        else:
+            self["dynamicauth"] = False
+
         if "sslverify" not in self:
             self["sslverify"] = self.section.sslverify
         elif not isinstance(self["sslverify"],bool):
@@ -622,9 +560,6 @@ class RequestConfig(UserDict):
         else:
             method = self.section.method
         self["method"] = method
-
-        if "data" not in self:
-            self["data"] = self.section.formdata
 
         location = self.get("location")
         location = location.strip() if location else None
@@ -736,9 +671,11 @@ class RequestConfig(UserDict):
             #no headers
             self["headers"] = None
 
+
         #init formdata
         #formdata support dynamic data
         data = self.get_formdata()
+
         fixeddata = None
         dynamicdata = None
         if not data:
@@ -746,7 +683,7 @@ class RequestConfig(UserDict):
             dynamicdata = None
         elif any(self._data_is_dynamic(v) for v in data.values()):
             #has some dynamic data
-            if data is self.section.data:
+            if data is self.section.formdata:
                 #service uses section's data
                 fixeddata = {}
                 dynamicdata = {}
@@ -773,17 +710,18 @@ class RequestConfig(UserDict):
             fixeddata = data
             dynamicdata = None
 
+        #init formdata
         dynamicdata = dynamicdata or None
         #if no dynamicdata, set it to None
-        self["dynamicdata"] = dynamicdata
+        self["dynamicformdata"] = dynamicdata
         if dynamicdata:
-            self["data"] = fixeddata
+            self["formdata"] = fixeddata
         elif fixeddata:
             #only has fixed data
-            self["data"] = fixeddata
+            self["formdata"] = fixeddata
         else:
             #no data
-            self["data"] = None
+            self["formdata"] = None
 
         try:
             timeout = self.get("timeout")
@@ -801,96 +739,101 @@ class RequestConfig(UserDict):
         self["timeout"] = timeout
         self["request_timeout"] = httpx.Timeout(connect = settings.CONNECT_TIMEOUT / 1000.0, read=timeout / 1000.0,write=timeout / 1000.0,pool=timeout/1000.0)
 
+
+    def __getattr__(self,attr):
+        v = self.get(attr,NOTEXIST)
+        if v is NOTEXIST:
+            v = self.section.get(attr)
+        return v
+
     @property
     def sectionid(self):
         return self.section.id
 
-    @property
-    def id(self):
-        return self['id']
-
-    @property
-    def user(self):
-        return self["user"]
-
-    @property
-    def password(self):
-        return self["password"]
 
     _auth = None
-    @property
-    def auth(self):
-        if not self._auth:
-            if self.user:
-                self._auth = (self.user,self.password)
+    async def get_auth(self,service,taskid):
+        if self["dynamicauth"]:
+            if callable(self["user"]):
+                if inspect.iscoroutinefunction(self["user"]):
+                    user = await self["user"](service,taskid)
+                else:
+                    user = self["user"](service,taskid)
             else:
-                return None
+                user = self["user"]
+            
+            if callable(self["password"]):
+                if inspect.iscoroutinefunction(self["password"]):
+                    password = await self["password"](service,taskid)
+                else:
+                    password = self["password"](service,taskid)
+            else:
+                password = self["password"]
 
-        return self._auth
+            return (user,password)
+        else:
+            if not self._auth:
+                if self.user:
+                    self._auth = (self.user,self.password)
+                else:
+                    return None
 
-    @property
-    def sslverify(self):
-        return self["sslverify"]
+            return self._auth
 
-    @property
-    def method(self):
-        return self['method']
 
     @property
     def url(self):
         return self['location']
 
     @property
-    def headers(self):
+    def fixedheaders(self):
+        return self["headers"]
+
+    async def get_requestheaders(self,service,taskid):
         if not self["dynamicheaders"]:
             return self["headers"]
         headers = self["headers"]
-        for k,v in self.self["dynamicheaders"].items():
-            headers[k] = v(self)
+        for k,v in self["dynamicheaders"].items():
+            if inspect.iscoroutinefunction(v):
+                headers[k] = await v(service,taskid)
+            else:
+                headers[k] = v(service,taskid)
 
         return headers
 
-    @property
-    def queryparameters(self):
+    async def get_requestparameters(self,service,taskid):
         if not self["dynamicqueryparameters"]:
             return None
         parameters = self["queryparameters"]
-        for k,v in self.self["dynamicqueryparameters"].items():
-            parameters[k] = v(self)
+        for k,v in self["dynamicqueryparameters"].items():
+            if inspect.iscoroutinefunction(v):
+                parameters[k] = await v(service,taskid)
+            else:
+                parameters[k] = v(service,taskid)
 
         return parameters
 
     @property
-    def formdata(self):
-        if not self["dynamicdata"]:
-            return self["data"]
-        data = self["data"]
-        for k,v in self.self["dynamicdata"].items():
-            data[k] = v(self)
+    def fixedformdata(self):
+        return self["formdata"]
+
+    async def get_requestformdata(self,service,taskid):
+        if not self["dynamicformdata"]:
+            return self["formdata"]
+        data = self["formdata"]
+        for k,v in self["dynamicformdata"].items():
+            if inspect.iscoroutinefunction(v):
+                data[k] = await v(service,taskid)
+            else:
+                data[k] = v(service,taskid)
 
         return data
 
-    @property
-    def request_timeout(self):
-        return self["request_timeout"]
-
-    @property
-    def timeout(self):
-        return self["timeout"]
-
-    @property
-    def sslverify(self):
-        return self["sslverify"]
 
 class SubrequestConfig(RequestConfig):
-    def __init__(self,healthcheck,section,configindex,data):
-        super().__init__(healthcheck,section,configindex,data)
-        self._value = {}
-        self._expireat = None
 
     def __str__(self):
-        return "Subrequest:{}.{}.{}".format(self.healthcheck,self.sectionid,self.requestid)
-
+        return "Subrequest:{}.{}.{}".format(self.healthcheck,self.sectionid,self.id)
 
     def get_queryparameters(self):
         return self.get("queryparameters") or {}
@@ -899,7 +842,14 @@ class SubrequestConfig(RequestConfig):
         return self.get("headers") or {}
 
     def get_formdata(self):
-        return self.get("data") or {}
+        return self.get("formdata") or {}
+
+    @property
+    def expirebuffer(self):
+        """
+        the timedelta between real data expire time  and the expire time returned in subrequest
+        """
+        return self["expirebuffer"]
 
     @property
     def expired(self):
@@ -908,41 +858,42 @@ class SubrequestConfig(RequestConfig):
         if self._expireat is None:
             return 
 
-    async def get_value(self,prop):
-        if not self._value  or self._expireat is None or utils.now() >= self._expireat:
-            self._value.clear()
-            self._expireat = None
+    def init_configs(self):
+        super().init_configs()
+        if not self.get("name"):
+            self["name"] = self.id
 
+        self["expirebuffer"] = timedelta(seconds=self.get("expirebuffer") or 10) #seconds.
+
+        if not self.get("values"):
+            raise ConfigError("{0} {1}({2}).{3}({4}): Missing the property(values) .".format(self.__class__.__name__,self.section.sectionindex,self.section.id,self.configindex,self.id))
+        if not isinstance(self["values"],list):
+            raise ConfigError("{0} {1}({2}).{3}({4}): The property(values) is not a list.".format(self.__class__.__name__,self.section.sectionindex,self.section.id,self.configindex,self.id))
+
+        #init values to a list of [condition, values map, transforms]
+        for i in range(len(self["values"])):
+            valueconfig = self["values"][i]
             try:
-                res = None
-                #logger.debug("Start to run the subrequest({})".format(self))
-                async with httpx.AsyncClient(auth=self.auth,timeout=self.request_timeout,verify=self.sslverify,headers=self.headers) as client:
-                    if self.servicehealthcheck.method == "GET":
-                        func = client.get
-                    elif self.servicehealthcheck.method == "POST":
-                        func = client.post
-                        res = await func(self.url,data=self.data)
-                    elif self.servicehealthcheck.method == "PUT":
-                        func = client.put
-                        res = await func(self.url,data=self.data)
-                    elif self.servicehealthcheck.method == "DELETE":
-                        func = client.delete
-                    else:
-                        #Not support
-                        raise Exception("Http method({}) Not Support".format(self.method))
-                    if data:
-                        res = await func(self.url,data=data)
-                    else:
-                        res = await func(self.url)
-            finally:
-                endtime = utils.now()
-                processtime = (endtime - starttime).total_seconds() * 1000
+                valueconfig[0] = checks.init_conds(self,valueconfig[0])
 
-        return self.value.get(prop)
+                #init the values map, change the value key to lowercase
+                valuesmap = {}
+                for prop in valueconfig[1].keys():
+                    valuesmap[prop.lower()] = checks.get_data_factory(self,valueconfig[1][prop])
+                valueconfig[1] = valuesmap
+
+                if len(valueconfig) >= 3:
+                    valueconfig[2] = checks.init_transforms(valueconfig[2])
+                else:
+                    valueconfig.append(None)
+
+            except Exception as ex:
+                traceback.print_exc()
+                raise ConfigError("{0} {1}({2}).{3}({4}): The config({5}) in property(values) is in valid.{6}: {7}".format(self.__class__.__name__,self.section.sectionindex,self.section.id,self.configindex,self.id,valueconfig,ex.__class__.__name__,str(ex)))
 
 class ServiceHealthCheckConfig(RequestConfig):
     selected = False
-
+    ASYNC_PROPERTIES = ["last_greenhealthcheck","last_yellowhealthcheck","last_greenyellowhealthcheck","last_redhealthcheck","last_errorhealthcheck"]
 
     def get_queryparameters(self):
         queryparameters = self.get("queryparameters")
@@ -969,7 +920,7 @@ class ServiceHealthCheckConfig(RequestConfig):
         return headers
 
     def get_formdata(self):
-        data = self.get("data")
+        data = self.get("formdata")
         if not data:
             data = self.section.formdata
         elif self.section.formdata:
@@ -1151,7 +1102,7 @@ class ServiceHealthCheckConfig(RequestConfig):
             prtgconfigs = None
 
         #init prtg config and convert it to config map
-        prtgconfigmap = OrderedDict()
+        prtgconfigmap = {}
         if prtgconfigs:
             #initialize the final prtg config
             #convert the prtg config from list to dict
@@ -1199,7 +1150,12 @@ class ServiceHealthCheckConfig(RequestConfig):
             prtgconfig["channel"] = RESERVED_PRTG_CHANNELNAME[channelid](self)
             prtgconfigmap[channelid] = (prtgconfig,{},{})
 
-        self["prtg"] = prtgconfigmap
+        self["prtg"] = OrderedDict()
+        #sort the prtg
+        prtgkeys = [k for k in prtgconfigmap.keys()]
+        prtgkeys.sort()
+        for key in prtgkeys:
+            self["prtg"][key] = prtgconfigmap[key]
 
         criticalweight = self.get("criticalweight")
         try:
@@ -1218,12 +1174,21 @@ class ServiceHealthCheckConfig(RequestConfig):
             raise ConfigError("{0} {1}({2}).{3}({4}): The property 'criticalweight'({5}) is incorrect.".format(self.__class__.__name__,self.section.sectionindex,self.section.id,self.configindex,self.id,criticalweight))
         self["criticalweight"] = criticalweight
 
+        async_properties = set()
+        self["dependent_async_properties"] = async_properties
+
         if self.url:
             if not self.get("healthchecks"):
-                raise ConfigError("{0} {1}({2}).{3}({4}): Missing healthcheck configuration.".format(self.__class__.__name__,self.section.sectionindex,self.section.id,self.configindex,self.id))
+                raise ConfigError("{0} {1}({2}).{3}({4}): Missing the property(healthchecks).".format(self.__class__.__name__,self.section.sectionindex,self.section.id,self.configindex,self.id))
             if not isinstance(self["healthchecks"],dict):
-                raise ConfigError("{0} {1}({2}).{3}({4}): Healthcheck is not a dictionary.".format(self.__class__.__name__,self.section.sectionindex,self.section.id,self.configindex,self.id))
-    
+                raise ConfigError("{0} {1}({2}).{3}({4}): The property(healthchecks) is not a dictionary.".format(self.__class__.__name__,self.section.sectionindex,self.section.id,self.configindex,self.id))
+
+            healthchecksconfig = json.dumps(self["healthchecks"])
+            for p in self.ASYNC_PROPERTIES:
+                if ".{}".format(p) in healthchecksconfig:
+                    #the healthcheck references this property
+                    async_properties.add(p)
+
             for key in list(self["healthchecks"].keys()):
                 try:
                     if key not in ("green","yellow","red","error"):
@@ -1246,9 +1211,15 @@ class ServiceHealthCheckConfig(RequestConfig):
                         #find the function to get prtg data by checking healthcheck config first and then service's prtg configuration.
                         for channelid,prtgconfig in self["prtg"].items():
                             if channelid in prtgdata_config:
-                                prtgdata_map[channelid] = checks.get_prtg_factory(self,prtgdata_config[channelid]) 
+                                prtgdata_map[channelid] = checks.get_data_factory(self,prtgdata_config[channelid]) 
                             elif key in prtgconfig[1]:
-                                prtgdata_map[channelid] = checks.get_prtg_factory(self,prtgconfig[1][key]) 
+                                for p in self.ASYNC_PROPERTIES:
+                                    if p in async_properties:
+                                        continue
+                                    if ".{}".format(p) in prtgconfig[1][key]:
+                                        #the prtg data references this property
+                                        async_properties.add(p)
+                                prtgdata_map[channelid] = checks.get_data_factory(self,prtgconfig[1][key]) 
     
                         if isinstance(self["healthchecks"][key],(list,tuple)):
                             self["healthchecks"][key] = [
@@ -1288,74 +1259,18 @@ class ServiceHealthCheckConfig(RequestConfig):
     def __str__(self):
         return "{}.{}.{}".format(self.healthcheck,self.sectionid,self.id)
 
-    @property
-    def name(self):
-        return self["name"]
-
-    @property
-    def enabled(self):
-        return self["enabled"]
-
-    @property
-    def checkingtime(self):
-        return self["checkingtime"]
-
-    @property
-    def offset(self):
-        return self["offset"]
-
-    @property
-    def interval(self):
-        return self["interval"]
-
-    @property
-    def retry(self):
-        return self["retry"]
-
-    @property
-    def retry_interval(self):
-        return self["retry_interval"]
-
-    @property
-    def max_retry_processtime(self):
-        return self["max_retry_processtime"]
-
-    @property
-    def historyexpire(self):
-        return self["historyexpire"]
 
     @property
     def historyenabled(self):
         return self.historyexpire > 0
 
     @property
-    def errorhistoryexpire(self):
-        return self["errorhistoryexpire"]
-
-    @property
     def errorhistoryenabled(self):
         return self.errorhistoryexpire > 0
 
     @property
-    def healthdetailpersistent(self):
-        return self["healthdetailpersistent"]
-
-    @property
-    def prtg(self):
-        return self["prtg"]
-
-    @property
     def prtgenabled(self):
         return True if self.prtg else False
-
-    @property
-    def criticalweight(self):
-        return self["criticalweight"]
-
-    @property
-    def healthchecks(self):
-        return self["healthchecks"]
-
 
     @property
     def prtgchannels(self):
@@ -1363,3 +1278,4 @@ class ServiceHealthCheckConfig(RequestConfig):
         A iterator of (channelid,[channelconfig,get_prtgdata,computed_columns])
         """
         return self['prtg'].items() if self['prtg'] else []
+

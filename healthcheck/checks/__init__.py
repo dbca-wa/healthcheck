@@ -9,7 +9,7 @@ from .. import settings
 
 from .base import datanotfound
 from . import httpstatus,jsonresponse,textresponse,httpheaders,redirect,regexresponse
-from .. import utils
+from .. import timezone
 
 TZ = settings.TZ
 
@@ -75,27 +75,27 @@ def parse_checkingtime(checkingtime):
         timerange.append(timerange[0])
         timerange.append(timerange[1])
         if timerange[0]:
-            timerange[0] = utils.parse_time(timerange[0])
+            timerange[0] = timezone.parse_time(timerange[0])
             timerange[0] = timerange[0].hour * 3600 + timerange[0].minute * 60 + timerange[0].second
         else:
             timerange[0] = 0
 
         if timerange[1]:
-            timerange[1] = utils.parse_time(timerange[1])
+            timerange[1] = timezone.parse_time(timerange[1])
             timerange[1] = timerange[1].hour * 3600 + timerange[1].minute * 60 + timerange[1].second
         else:
             timerange[1] = 86400
 
         if timerange[0] >= timerange[1]:
-            raise Exception("Timerange({0},{1}),Startime({0}) should be less than endtime({1})".format(utils.format_time(timerange[2]),utils.format_time(timerange[3])))
+            raise Exception("Timerange({0},{1}),Startime({0}) should be less than endtime({1})".format(timezone.format_time(timerange[2]),timezone.format_time(timerange[3])))
 
         if previous_range:
             if previous_range[1] >= timerange[0]:
                 raise Exception("The timerange({0},{1}) is overlapped with timerange({2},{3})".format(
-                    utils.format_time(previous_range[2]),
-                    utils.format_time(previous_range[3]),
-                    utils.format_time(timerange[2]),
-                    utils.format_time(timerange[3])
+                    timezone.format_time(previous_range[2]),
+                    timezone.format_time(previous_range[3]),
+                    timezone.format_time(timerange[2]),
+                    timezone.format_time(timerange[3])
                 ))
         previous_range = timerange
 
@@ -194,7 +194,7 @@ def _convert_datatype(val,dt,params=None):
             
             td = timedelta(days=days,hours=hours,minutes=minutes,seconds=seconds)
             if dt == datetime:
-                return utils.now()  + td
+                return timezone.now()  + td
             elif dt == date:
                 return date.today()  + td
             else:
@@ -668,6 +668,7 @@ def _get_value_factory(service,config,datanotfound_value="N/A"):
 
             return _f(data) if _f else data
         except Exception as ex:
+            traceback.print_exc()
             return datanotfound_value
         
     return _func
@@ -709,7 +710,7 @@ def get_message_factory(service,config,datanotfound_value="N/A"):
         #message pattern
         return _format_message_factory(service,config,datanotfound_value=datanotfound_value)
 
-def get_prtg_factory(service,config):
+def get_data_factory(service,config):
     if not config:
         def _func(res):
             if res.status_code >=200 and res.status_code < 300:

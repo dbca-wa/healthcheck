@@ -14,7 +14,7 @@
   </head>
   <body>
       {% if system %}
-      <form action="/healthcheck/config/view/{{system}}" method="POST">
+      <form action="/healthcheck/admin/systemview/{{system}}/setting" method="POST">
       {% else %}
       <form action="/healthcheck/customize" method="POST">
       {% endif %}

@@ -1,4 +1,5 @@
 import json
+import re
 import os
 import aiofiles
 import aiofiles.os
@@ -9,6 +10,7 @@ from datetime import datetime,timedelta
 
 from .. import settings
 from .. import utils
+from .. import timezone
 from .. import serializers
 from ..locks import FileLock
 
@@ -32,8 +34,8 @@ class HealthCheckStatus(object):
             return None
         try:
             checkstatus = json.loads(data)
-            checkstatus[0] = utils.parse_datetime(checkstatus[0])
-            checkstatus[1] = utils.parse_datetime(checkstatus[1])
+            checkstatus[0] = timezone.parse(checkstatus[0])
+            checkstatus[1] = timezone.parse(checkstatus[1])
         except Exception as ex:
             raise Exception("The healthcheck status({}) is corrupted".format(data))
 
@@ -67,6 +69,23 @@ class HealthCheckPage(object):
     @property
     def filepath(self):
         return self._filepath
+
+    def set_last_healthcheck(self,healthcheckstatus):
+        """
+        Set last healthcheck status
+        and also update the other specific last healthcheck status
+        """
+        self._last_healthcheck = healthcheckstatus
+        if self._last_healthcheck[2] == "green":
+            self._last_greenhealthcheck = self._last_healthcheck
+            self._last_greenyellowhealthcheck = self._last_healthcheck
+        elif self._last_healthcheck[2] == "yellow":
+            self._last_yellowhealthcheck = self._last_healthcheck
+            self._last_greenyellowhealthcheck = self._last_healthcheck
+        elif self._last_healthcheck[2] == "red":
+            self._last_redhealthcheck = self._last_healthcheck
+        else:
+            self._last_errorhealthcheck = self._last_healthcheck
 
     async def get_last_healthcheck(self):
         if self._size is None:
@@ -108,7 +127,7 @@ class HealthCheckPage(object):
     def deserialize(cls,healthcheckpages,data):
         try:
             pageindexdata = json.loads(data)
-            pageindexdata[0] = utils.parse_datetime(pageindexdata[0])
+            pageindexdata[0] = timezone.parse(pageindexdata[0])
             pageindexdata[1] = os.path.join(healthcheckpages.basedir,pageindexdata[1])
             return cls(healthcheckpages,*pageindexdata)
         except Exception as ex:
@@ -135,17 +154,7 @@ class HealthCheckPage(object):
                     if data == "":
                         break
                     size += 1
-                    self._last_healthcheck = HealthCheckStatus.deserialize(data)
-                    if self._last_healthcheck[2] == "green":
-                        self._last_greenhealthcheck = self._last_healthcheck
-                        self._last_greenyellowhealthcheck = self._last_healthcheck
-                    elif self._last_healthcheck[2] == "yellow":
-                        self._last_yellowhealthcheck = self._last_healthcheck
-                        self._last_greenyellowhealthcheck = self._last_healthcheck
-                    elif self._last_healthcheck[2] == "red":
-                        self._last_redhealthcheck = self._last_healthcheck
-                    else:
-                        self._last_errorhealthcheck = self._last_healthcheck
+                    self.set_last_healthcheck(HealthCheckStatus.deserialize(data))
             self._size = size
         except FileNotFoundError as ex:
             self._size = 0
@@ -165,12 +174,13 @@ class HealthCheckPage(object):
         data = HealthCheckStatus.serialize(healthcheckstatus)
         async with aiofiles.open(self._filepath,'ab') as f:
             if self._size > 0:
+                self._size += 1
                 await f.write(b"\n" + data.encode())
             else:
+                self._size += 1
                 await f.write(data.encode())
-            self._size += 1
 
-        self._last_healthcheck = healthcheckstatus
+        self.set_last_healthcheck(healthcheckstatus)
 
         return True
 
@@ -198,7 +208,7 @@ class HealthCheckPage(object):
                         continue
 
     async def reversed_pageitems(self):
-        data = [d for d in await self.pageitems()]
+        data = [d async for d in self.pageitems()]
         return reversed(data)
 
 class LastHealthCheck(HealthCheckPage):
@@ -224,7 +234,7 @@ class LastHealthCheck(HealthCheckPage):
             await f.write(data.encode())
         self._size += 1
 
-        self._last_healthcheck = healthcheckstatus
+        self.set_last_healthcheck(healthcheckstatus)
 
         return True
 
@@ -262,7 +272,7 @@ class LastHealthCheckInMemory(LastHealthCheck):
         """
         self._size = 1
 
-        self._last_healthcheck = healthcheckstatus
+        self.set_last_healthcheck(healthcheckstatus)
 
         return True
 
@@ -323,14 +333,9 @@ class BasicHealthCheckPages(object):
         self._servicehealthcheck = servicehealthcheck
         self.historyenabled = self._servicehealthcheck.historyenabled
 
-    _basedir = None
     @property
     def basedir(self):
-        if not self._basedir:
-            folder = os.path.join(settings.HEALTHCHECK_DATA_DIR,os.path.splitext(os.path.basename(self._servicehealthcheck.healthcheck.configfile))[0],self._servicehealthcheck.sectionid,self._servicehealthcheck.id)
-            self._basedir = folder
-
-        return self._basedir
+        return self._servicehealthcheck.basedir
 
     _pageindexfile = None
     @property
@@ -343,11 +348,18 @@ class BasicHealthCheckPages(object):
 
         return self._pageindexfile
 
-    def pagedir(self,starttime):
-        return os.path.join(self.basedir,self._pagefolder)
+    _pagedir = None
+    @property
+    def pagedir(self):
+        if not self._pagedir:
+            self._pagedir = os.path.join(self.basedir,self._pagefolder)
+        return self._pagedir
 
-    def pagefile(self,starttime):
-        return os.path.join(self.pagedir(starttime),self._pagefilename.format(starttime.strftime("%Y%m%dT%H%M%S")))
+    def pagefile(self,pageid):
+        if isinstance(pageid,datetime):
+            return os.path.join(self.pagedir,self._pagefilename.format(pageid.strftime("%Y%m%dT%H%M%S")))
+        else:
+            return os.path.join(self.pagedir,self._pagefilename.format(pageid))
 
     @property
     def detailsdir(self):
@@ -355,6 +367,9 @@ class BasicHealthCheckPages(object):
 
     _previous_detail_dir = None
     async def get_detaildir(self,starttime):
+        """
+        Detail file is saved in a daily folder
+        """
         folder =  os.path.join(self.detailsdir,starttime.strftime("%Y%m%d"))
         if self._previous_detail_dir != folder:
             await utils.makedir(folder)
@@ -419,11 +434,12 @@ class BasicHealthCheckPages(object):
         else:
             try:
                 filesize = await aiofiles.os.path.getsize(self.pageindexfile)
+                if self._filesize != filesize:
+                    await self._load()
             except FileNotFoundError as ex:
-                filesize = 0
-            if self._filesize != filesize:
-                await self._load()
-        return self._pages
+                self._filesize = None
+                self._pages = None
+        return self._pages or []
 
     async def save_healthcheckstatus(self,healthcheckstatus):
         """
@@ -447,10 +463,11 @@ class BasicHealthCheckPages(object):
 
             async with aiofiles.open(self.pageindexfile,'ab') as f:
                 if self._pages:
+                    self._pages.append(newpage)
                     await f.write(b"\n" + newpage.serialize().encode())
                 else:
+                    self._pages.append(newpage)
                     await f.write(newpage.serialize().encode())
-            self._pages.append(newpage)
 
             await newpage.save(healthcheckstatus)
         except FileNotFoundError as ex:
@@ -472,7 +489,7 @@ class BasicHealthCheckPages(object):
             #no need to manage
             return  False
 
-        now = utils.now()
+        now = timezone.now()
         if self.next_management_time and now < self.next_management_time:
             manage_history = False
         else :
@@ -518,6 +535,28 @@ class BasicHealthCheckPages(object):
         else:
             return False
 
+    async def clean_zombiefiles(self):
+        basedir = self.basedir
+        pagepaths = set()
+        for p in await self.get_pages() or []:
+            pagepaths.add(p.filepath)
+
+        for f in await aiofiles.os.listdir(basedir):
+            path = os.path.join(basedir,f)
+            if self.historyenabled and path == self.pageindexfile:
+                continue
+            if path == self.pagedir:
+                for page in await aiofiles.os.listdir(path):
+                    pagepath = os.path.join(path,page)
+                    if pagepath in pagepaths:
+                        #not expired
+                        continue
+                    else:
+                        #expired
+                        logger.info("{}: Delete the expire healthcheck history page({})".format(self._servicehealthcheck,pagepage))
+                        await utils.removefile(pagepath)
+
+
 class HealthCheckPages(BasicHealthCheckPages):
     """
     pages: a list of page data([startdatetime,page file])
@@ -532,6 +571,10 @@ class HealthCheckPages(BasicHealthCheckPages):
         self._lock = FileLock(os.path.join(self.basedir,".lock"))
         self._historyexpire = self._servicehealthcheck.historyexpire
         self._errorpages = HealthCheckErrorPages.get_instance(servicehealthcheck) if servicehealthcheck.errorhistoryenabled else None
+
+    @property
+    def lockfile(self):
+        return self._lock.file
 
     @property
     def errorpages(self):
@@ -623,7 +666,7 @@ class HealthCheckPages(BasicHealthCheckPages):
         if self.historyenabled:
             return super().pagefile(starttime)
         else:
-            return os.path.join(self.basedir,"latesthealthcheck.json")
+            return super().pagefile("latesthealthcheck.json")
 
     async def get_detailfile(self,starttime):
         if not self._servicehealthcheck.url:
@@ -656,6 +699,43 @@ class HealthCheckPages(BasicHealthCheckPages):
         else:
             return await super().get_pages()
 
+    detailsfolder_re = re.compile("^\\d{8}$")
+    async def clean_detailfiles(self):
+        """
+        Clean the detailfiles which is not referenced by history or error history
+        """
+        starttime = None
+        #find the earliest history time.
+        if self._historyexpire > 0:
+            starttime = self._pages[0]._starttime
+        #find the earliest start time between history and error history.
+        if self._errorpages and self._errorpages._historyexpire > 0 and self._errorpages._pages:
+            if not starttime:
+                starttime = self._errorpages._pages[0]._starttime
+            elif starttime > self._errorpages._pages[0]._starttime:
+                starttime = self._errorpages._pages[0]._starttime
+
+        if starttime:
+            #find the start time, clean all the details before that day
+            ealiest_nonexpiretime = starttime.strftime("%Y%m%d")
+        else:
+            #can't find start time, clean all details
+            ealiest_nonexpiretime = None
+
+        if await aiofiles.os.path.exists(self.detailsdir):
+            for d in await aiofiles.os.listdir(self.detailsdir):
+                path = os.path.join(self.detailsdir,d)
+                if await aiofiles.os.path.isfile(path):
+                    logger.info("{}: Delete the file({}) which is not a details folder".format(self._servicehealthcheck,path))
+                    await utils.removefile(path)
+                elif not self.detailsfolder_re.search(d):
+                    logger.info("{}: Delete the details folder({}) which is not a details folder".format(self._servicehealthcheck,path) )
+                    await utils.deletedir(path)
+                if not ealiest_nonexpiretime or d < ealiest_nonexpiretime:
+                    logger.info("{}: Delete the details folder({}) which is expired".format(self._servicehealthcheck,path) )
+                    await utils.deletedir(path)
+
+
     async def save(self,healthcheckstatus,details=None):
         cleaned = False
         async with self._lock:
@@ -666,27 +746,47 @@ class HealthCheckPages(BasicHealthCheckPages):
                     async with aiofiles.open(await self._pages[-1].get_detailfile(healthcheckstatus[0]),'w') as f:
                         await f.write(json.dumps(details,cls=serializers.JSONFormater))
 
-            if self._errorpages and healthcheckstatus[2] != "green" and healthcheckstatus[2] in self._servicehealthcheck.healthdetailpersistent:
+            if self._errorpages and healthcheckstatus[2] != "green" :
                 cleaned = cleaned or await self._errorpages.save_healthcheckstatus(healthcheckstatus)
             
             if cleaned:
                 #a history clean action was performed. try to clean the expired details
-                #Find the earliest starttime of the details
-                starttime = None
-                if self._historyexpire > 0:
-                    starttime = self._pages[0]._starttime
-                if self._errorpages._historyexpire > 0 and self._errorpages._pages:
-                    if not starttime:
-                        starttime = self._errorpages._pages[0]._starttime
-                    elif starttime > self._errorpages._pages[0]._starttime:
-                        starttime = self._errorpages._pages[0]._starttime
-                if starttime:
-                    #find the start time, clean all the details before that day
-                    ealiest_nonexpiretime = starttime.strftime("%Y-%m-%d")
-                    if await aiofiles.os.path.exists(self.detailsdir):
-                        for d in await aiofiles.os.listdir(self.detailsdir):
-                            if d < ealiest_nonexpiretime:
-                                await utils.deletedir(os.path.join(self.detailsdir,d))
+                await self.clean_detailfiles()
+
+    async def clean_zombiefiles(self):
+        await super().clean_zombiefiles()
+        if self._errorpages:
+            await self._errorpages.clean_zombiefiles()
+
+        #clean the detail files
+        await self.clean_detailfiles()
+
+        basedir = self.basedir
+
+        for f in await aiofiles.os.listdir(basedir):
+            path = os.path.join(basedir,f)
+            if self.historyenabled and path == self.pageindexfile:
+                continue
+            elif path == self.pagedir:
+                continue
+            elif path == self.lockfile:
+                continue
+            elif self._errorpages:
+                if self._errorpages.historyenabled and path == self._errorpages.pageindexfile:
+                    continue
+                elif path == self._errorpages.pagedir:
+                    continue
+            elif path == self.detailsdir:
+                continue
+            else:
+                #not belonging to healthcheck
+                if await aiofiles.os.path.isfile(path):
+                    logger.info("{}: Delete the file({}) which is not belonging to healthcheck".format(self._servicehealthcheck,path) )
+                    await utils.removefile(path)
+                else:
+                    logger.info("{}: Delete the folder({}) which is not belonging to healthcheck".format(self._servicehealthcheck,path) )
+                    await utils.deletedir(path)
+
 
 class HealthCheckErrorPages(BasicHealthCheckPages):
     """

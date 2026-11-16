@@ -586,7 +586,7 @@ class HealthCheck(BaseHealthCheck):
             logger.debug("{}: Append the system views file({})".format(self,self.systemviewsfile))
 
     async def save_prtgsensor(self,sensorid,title,description):
-        prtgsensors = self.get_prtgsensors()
+        prtgsensors = await self.get_prtgsensors()
         sensor = next((v for v in prtgsensors if v.id == sensorid),None)
         if sensor:
             if sensor.title != title or sensor.description != description:
@@ -642,7 +642,7 @@ class HealthCheck(BaseHealthCheck):
         self._systemviews[1] = await aiofiles.os.path.getsize(self.systemviewsfile)
 
     async def delete_prtgsensor(self,sensorid):
-        prtgsensors = self.get_prtgsensors()
+        prtgsensors = await self.get_prtgsensors()
         pos = next((i for i in range(len(prtgsensors)) if prtgsensors[i].id == sensorid),-1)
         if pos == -1:
             return
