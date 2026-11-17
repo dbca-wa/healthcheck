@@ -562,7 +562,7 @@ class ServiceHealthCheck(ServiceHealthCheckConfig):
 
         #load dependent async properties
         for prop in self.dependent_async_properties:
-            await getattr(self,"load_".format(prop))()
+            await getattr(self,"load_{}".format(prop))()
 
         next_checktime = self.get_nextchecktime(last_healthcheck[0] if last_healthcheck else None)
         self.healthstatus = [next_checktime,last_healthcheck,False] 

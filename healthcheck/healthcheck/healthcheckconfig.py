@@ -1216,7 +1216,7 @@ class ServiceHealthCheckConfig(RequestConfig):
                                 for p in self.ASYNC_PROPERTIES:
                                     if p in async_properties:
                                         continue
-                                    if ".{}".format(p) in prtgconfig[1][key]:
+                                    if ".{}".format(p) in str(prtgconfig[1][key]):
                                         #the prtg data references this property
                                         async_properties.add(p)
                                 prtgdata_map[channelid] = checks.get_data_factory(self,prtgconfig[1][key]) 
@@ -1253,6 +1253,7 @@ class ServiceHealthCheckConfig(RequestConfig):
                 except Exception as ex:
                     traceback.print_exc()
                     raise ConfigError("{0} {1}({2}).{3}({4}): The config({5}) in healthchecks is in valid.{6}: {7}".format(self.__class__.__name__,self.section.sectionindex,self.section.id,self.configindex,self.id,key,ex.__class__.__name__,str(ex)))
+
     
 
 

@@ -257,10 +257,10 @@ async def main():
     global healthcheck
     global editing_healthcheck
     try:
-        server = HealthCheckServer(f_get_connection_cls=get_connection_cls)
-        await server.start()
         healthcheck = await HealthCheck.get_instance()
         editing_healthcheck = await healthcheck.get_editing_healthcheck()
+        server = HealthCheckServer(f_get_connection_cls=get_connection_cls)
+        await server.start()
         await healthcheck.continuous_check(server,taskcls=ServiceHealthCheckTask)
         await shutdown.wait()
         while True:
