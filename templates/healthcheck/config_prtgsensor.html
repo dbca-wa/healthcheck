@@ -12,7 +12,7 @@
     </style>
   </head>
   <body>
-      <form action="/healthcheck/config/prtgsensor/{{sensorid}}" method="POST">
+      <form action="/healthcheck/admin/prtgsensor/{{sensorid}}/setting" method="POST">
 
       <h3>
       <table class="menubar"><tr><th>
@@ -39,9 +39,9 @@
             {% for channel in service.selectableprtgchannels %}
             <table class="customizechannelselect"><tr><td>
                   {% if channel.selected %}
-                  <input type="checkbox" name="{{section.sectionid}}:{{service.serviceid}}:{{channel.channelid}}" checked/>
+                  <input type="checkbox" name="{{section.id}}:{{service.id}}:{{channel.channelid}}" checked/>
                   {% else %}
-                  <input type="checkbox" name="{{section.sectionid}}:{{service.serviceid}}:{{channel.channelid}}" />
+                  <input type="checkbox" name="{{section.id}}:{{service.id}}:{{channel.channelid}}" />
                   {% endif %}
             </td><td>
                   {{channel.channelname}}

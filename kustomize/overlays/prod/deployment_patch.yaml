@@ -8,10 +8,9 @@ spec:
       volumes:
         - name: healthcheck-data
           persistentVolumeClaim:
-            claimName: healthcheck-data-prod
+            claimName: healthcheck-data2-prod
       containers:
         - name: healthcheck
-          imagePullPolicy: IfNotPresent
           envFrom:
             - secretRef:
                 name: healthcheck-env-prod
