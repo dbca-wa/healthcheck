@@ -200,7 +200,7 @@ requires-dist = [
 
 [package.metadata.requires-dev]
 dev = [
-    { name = "ipdb" },
+    { name = "ipdb", specifier = ">=0.13" },
     { name = "ipython", specifier = ">=9.18" },
     { name = "pre-commit", specifier = ">=4.6" },
     { name = "pytest", specifier = ">=9.2" },

@@ -25,7 +25,7 @@ dev = [
   "pre-commit>=4.6",
   "pytest>=9.2",
   "pytest-asyncio>=1.4",
-  "ipdb",
+  "ipdb>=0.13",
 ]
 
 [tool.ruff]
