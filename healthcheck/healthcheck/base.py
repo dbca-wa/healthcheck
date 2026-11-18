@@ -594,10 +594,10 @@ class SectionHealthCheck(SectionHealthCheckConfig):
             if path not in servicefolders:
                 #this path is not for any section
                 if await aiofiles.os.path.isfile(path):
-                    logger.info("{}: Delete the file({}) which is not belonging to healthcheck".format(self,path))
+                    logger.info("{}: Delete the file({}) which is not a healthcheck service".format(self,path))
                     await utils.removefile(path)
                 else:
-                    logger.info("{}: Delete the folder({}) which is not belonging to healthcheck".format(self,path))
+                    logger.info("{}: Delete the folder({}) which is not a healthcheck service".format(self,path))
                     await utils.deletedir(path)
 
 class BaseHealthCheck(PRTGMixin,JsonStatusMixin):
@@ -658,10 +658,10 @@ class BaseHealthCheck(PRTGMixin,JsonStatusMixin):
             if path not in sectionfolders:
                 #this path is not for any section
                 if await aiofiles.os.path.isfile(path):
-                    logger.info("{}: Delete the file({}) which is not belonging to healthcheck".format(self,path))
+                    logger.info("{}: Delete the file({}) which is not a healthcheck section".format(self,path))
                     await utils.removefile(path)
                 else:
-                    logger.info("{}: Delete the folder({}) which is not belonging to healthcheck".format(self,path))
+                    logger.info("{}: Delete the folder({}) which is not a healthcheck section".format(self,path))
                     await utils.deletedir(path)
 
 

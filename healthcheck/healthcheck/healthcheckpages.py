@@ -340,9 +340,6 @@ class BasicHealthCheckPages(object):
     _pageindexfile = None
     @property
     def pageindexfile(self):
-        if not self.historyenabled:
-            raise Exception("{}: History health check is disabled".format(self._servicehealthcheck))
-
         if self._pageindexfile is None:
             self._pageindexfile = os.path.join(self.basedir,self._pageindexfilename)
 
@@ -538,12 +535,13 @@ class BasicHealthCheckPages(object):
     async def clean_zombiefiles(self):
         basedir = self.basedir
         pagepaths = set()
-        for p in await self.get_pages() or []:
+        await self._load()
+        for p in self._pages or []:
             pagepaths.add(p.filepath)
 
         for f in await aiofiles.os.listdir(basedir):
             path = os.path.join(basedir,f)
-            if self.historyenabled and path == self.pageindexfile:
+            if path == self.pageindexfile:
                 continue
             if path == self.pagedir:
                 for page in await aiofiles.os.listdir(path):
@@ -706,7 +704,7 @@ class HealthCheckPages(BasicHealthCheckPages):
         """
         starttime = None
         #find the earliest history time.
-        if self._historyexpire > 0:
+        if self._historyexpire > 0 and self._pages:
             starttime = self._pages[0]._starttime
         #find the earliest start time between history and error history.
         if self._errorpages and self._errorpages._historyexpire > 0 and self._errorpages._pages:
@@ -765,28 +763,24 @@ class HealthCheckPages(BasicHealthCheckPages):
 
         for f in await aiofiles.os.listdir(basedir):
             path = os.path.join(basedir,f)
-            if self.historyenabled and path == self.pageindexfile:
+            if path == self.pageindexfile:
                 continue
             elif path == self.pagedir:
                 continue
             elif path == self.lockfile:
                 continue
-            elif self._errorpages:
-                if self._errorpages.historyenabled and path == self._errorpages.pageindexfile:
-                    continue
-                elif path == self._errorpages.pagedir:
-                    continue
             elif path == self.detailsdir:
                 continue
-            else:
-                #not belonging to healthcheck
-                if await aiofiles.os.path.isfile(path):
-                    logger.info("{}: Delete the file({}) which is not belonging to healthcheck".format(self._servicehealthcheck,path) )
-                    await utils.removefile(path)
-                else:
-                    logger.info("{}: Delete the folder({}) which is not belonging to healthcheck".format(self._servicehealthcheck,path) )
-                    await utils.deletedir(path)
+            elif self._errorpages and (path == self._errorpages.pageindexfile or path == self._errorpages.pagedir):
+                continue
 
+            #not belonging to healthcheck
+            if await aiofiles.os.path.isfile(path):
+                logger.info("{}: Delete the file({}) which is not belonging to healthcheck".format(self._servicehealthcheck,path) )
+                await utils.removefile(path)
+            else:
+                logger.info("{}: Delete the folder({}) which is not belonging to healthcheck".format(self._servicehealthcheck,path) )
+                await utils.deletedir(path)
 
 class HealthCheckErrorPages(BasicHealthCheckPages):
     """
