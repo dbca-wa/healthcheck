@@ -51,7 +51,7 @@ The front-end application runs on port 8080 by default. To change this, modify `
 
 Run unit tests using `pytest`:
 
-    pytest -s --pdb
+    pytest -v --pdb
 
 ## Docker image
 
