@@ -47,7 +47,7 @@ async def main():
         print(
             "Response: status code = {}{}{}".format(
                 res.status_code,
-                "\n    Headers:\n        ".format("\n        ".join(f"{key}={value}" for key, value in res.headers.items()))
+                "\n    Headers:\n        {}".format("\n        ".join(f"{key}={value}" for key, value in res.headers.items()))
                 if res.headers
                 else "",
                 (f"\n---------------------------\n{json.dumps(res.jsondata, indent=4) if res.jsondata else res.data}") if res.data else {},
@@ -60,7 +60,8 @@ async def main():
         for o in sectionconfig["services"].values():
             serviceconfig = o
             break
-        healthstatus = healthcheck.check_response(serviceconfig, res)
+        healthstatus = healthcheck.check_response(serviceconfig, res, 1, 0)
+        print("Health status: {} ({})".format(healthstatus[0], serviceconfig.get("name", serviceconfig.get("id"))))
 
 
 if __name__ == "__main__":
