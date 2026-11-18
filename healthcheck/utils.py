@@ -1,9 +1,8 @@
-import os
 import shutil
 import logging
 import asyncio
+import aiofiles.os
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime
 
 from . import settings
 
@@ -17,48 +16,51 @@ async def ainput(prompt: str = "") -> str:
     except EOFError as ex:
         await shutdown.process_userinterruption()
 
-def remove_file(f):
-    try:
-        os.remove(f)
-    except Exception as ex:
-        if os.path.exists(f):
-            logger.error("Failed to remove the file '{}'. {} : {}".format(f,ex.__class__.__name__,str(ex)))
+async def copyfile(source,target):
+    await asyncio.to_thread(shutil.copyfile, source,target)
 
-def makedir(folder):
-    if not os.path.exists(folder):
-        try:
-            os.makedirs(folder)
-        except FileExistsError as ex:
-            pass
-        except Exception as ex:
-            raise ex
-    elif not os.path.isdir(folder):
-        raise Exception("The folder path({}) is not a directory".format(folder))
-
-def deletedir(folder):
+async def removefile(f,ignore_exception=True):
     try:
-        shutil.rmtree(folder)
+        await aiofiles.os.remove(f)
     except FileNotFoundError as ex:
         pass
     except Exception as ex:
-        raise Exception("Failed to remove the folder({}).{}: {}".format(folder,ex.__class__.__name__,str(ex)))
+        if ignore_exception:
+            logger.error("Failed to remove the file '{}'. {} : {}".format(f,ex.__class__.__name__,str(ex)))
+        else:
+            raise
 
+async def makedir(folder):
+    try:
+        await aiofiles.os.makedirs(folder)
+    except FileExistsError as ex:
+        if not await aiofiles.os.path.isdir(folder):
+            raise IsADirectoryError("The folder path({}) is not a directory".format(folder))
 
-def now():
-    return datetime.now().astimezone(settings.TZ)
+_delete_nonempty_dir_supported = None
+async def deletedir(folder):
+    global  _delete_nonempty_dir_supported
+    if _delete_nonempty_dir_supported is None or _delete_nonempty_dir_supported:
+        try:
+            await asyncio.to_thread(shutil.rmtree, folder)
+            _delete_nonempty_dir_supported = True
+            return
+        except FileNotFoundError as ex:
+            return
+        except Exception as ex:
+            _delete_nonempty_dir_supported = False
+            raise Exception("Failed to remove the folder({}).{}: {}".format(folder,ex.__class__.__name__,str(ex)))
 
-def parse_datetime(dt,pattern="%Y-%m-%dT%H:%M:%S.%f"):
-    return datetime.strptime(dt,pattern).replace(tzinfo=settings.TZ)
-
-def format_time(dt,pattern="%H:%M:%S"):
-    return dt.strftime(pattern)
-
-def parse_time(dt,pattern="%H:%M:%S"):
-    if dt:
-        return datetime.strptime(dt,pattern).time().replace(tzinfo=settings.TZ)
-    else:
-        return ""
-
-
-
+    if _delete_nonempty_dir_supported is False:
+        #don't support delete folder
+        #delete all files in the folder first.
+        for name in await aiofiles.os.listdir(folder):
+            f = os.path.join(folder,name)
+            if await aiofiles.os.path.isfile(f):
+                #is file, delete
+                await aiofiles.os.remove(f)
+            else:
+                await deletedir(f)
+        #delete the folder itself
+        await aiofiles.os.rmdir(folder)
 

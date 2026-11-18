@@ -6,10 +6,10 @@ let debug = false
 {% endif %}
 let healthstatus={}
 {% for section in healthcheck.healthchecksections %}
-healthstatus['{{section.sectionid}}'] = {}
+healthstatus['{{section.id}}'] = {}
     {% for service in section.healthcheckservices %}
         {% if service.healthstatus %}
-healthstatus['{{section.sectionid}}']['{{service.serviceid}}'] = {"timeout":{{service.timeout}},"checkstart":"{{service.healthstatus[1][0]}}","nextcheck": new Date("{{service.healthstatus[0]}}"),"message":`
+healthstatus['{{section.id}}']['{{service.id}}'] = {"timeout":{{service.timeout}},"checkstart":"{{service.healthstatus[1][0]}}","nextcheck": new Date("{{service.healthstatus[0]}}"),"message":`
        Health Status : {{service.healthstatus_name}}
     Check Start Time : {{service.healthstatus_checkstart}} 
       Check End Time : {{service.healthstatus_checkend}}
@@ -17,7 +17,7 @@ Health Check Message : {{service.healthstatus_info}}
      Next Check Time : {{service.healthstatus_nextcheck}}
 `}
         {% else %}
-healthstatus['{{section.sectionid}}']['{{service.serviceid}}'] = {"timeout":{{service.timeout}},"checkstart":"","nextcheck": null,"message":`Health Status : N/A
+healthstatus['{{section.id}}']['{{service.id}}'] = {"timeout":{{service.timeout}},"checkstart":"","nextcheck": null,"message":`Health Status : N/A
 Check Start Time : N/A 
 Check End Time : N/A
 Health Status Message : N/A
@@ -34,6 +34,7 @@ let lasttime2receivedata = new Date()
 let heartbeat_timeouts = 0
 let running = true
 let fetching = false
+let paused = false
 const nextcheck_timeout_delay = {{nextcheck_timeout_delay}}
 const statuslist = ["green","yellow","red","error"]
 
@@ -48,7 +49,7 @@ function format_date(d) {
 
 function browserside_check() {
     let now = new Date()
-    if ((now - lasttime2receivedata) > 120000) {
+    if (!paused && (now - lasttime2receivedata) > 120000) {
         //never receive any data in latest 2+ minutes
         //reload the page
         if (controller !== null) {
@@ -215,6 +216,12 @@ async function fetch_healthstatus() {
             for(let i = 0;i < datas.length - 1;i++) {
                 try{
                     //data item: [[sectionid,serviceid],[next checktime,[check startime,check endtime,status name,msg,persistent?]]]
+                    //trim the leading and tail space
+                    datas[i] = datas[i].trim()
+                    if (datas[i].length == 0) {
+                        //empty data, ignore
+                        continue
+                    }
                     if ( i === 0 && remaindata !== "" ) {
                         try {
                             datas[i] = JSON.parse(datas[i])
@@ -229,8 +236,10 @@ async function fetch_healthstatus() {
                             window.location.reload(true);
                         } else if (datas[i] === "continuouscheck_started") {
                             _continuouscheck_started()
+                            paused = false
                         } else if (datas[i] === "continuouscheck_stopped") {
                             _continuouscheck_stopped()
+                            paused = true
                         }
                         continue
                     }
@@ -293,7 +302,7 @@ Health Check Message : ` + datas[i][1][1][3] + `
                 }
             }
             remaindata = datas[datas.length - 1]
-            if (heartbeat_timeouts >= 3) {
+            if (!paused && (heartbeat_timeouts >= 3)) {
                 //System failed to sync all services' health check data, 
                 //Still don't know the reason until now
                 //Reconnect the status stream to resolve the issue
@@ -328,50 +337,50 @@ fetch_healthstatus()
     {% if service.enabled %}
     <div class="servicehealthstatus">
         <div class="servicename">{{service.name}}</div>
-        <div class="healthstatus" id="{{section.sectionid}}-{{service.serviceid}}-statusname">
+        <div class="healthstatus" id="{{section.id}}-{{service.id}}-statusname">
               {% if service.healthstatus_name == "green" %}
-              <img id="{{section.sectionid}}-{{service.serviceid}}-statusname-green" src="/static/img/green.svg" style="display:inline" class="healthstatusimg"/>
+              <img id="{{section.id}}-{{service.id}}-statusname-green" src="/static/img/green.svg" style="display:inline" class="healthstatusimg"/>
               {% else %}
-              <img id="{{section.sectionid}}-{{service.serviceid}}-statusname-green" src="/static/img/green.svg" style="display:none" class="healthstatusimg"/>
+              <img id="{{section.id}}-{{service.id}}-statusname-green" src="/static/img/green.svg" style="display:none" class="healthstatusimg"/>
               {% endif %}
               {% if service.healthstatus_name == "yellow" %}
-              <img id="{{section.sectionid}}-{{service.serviceid}}-statusname-yellow" src="/static/img/yellow.svg" style="display:inline" class="healthstatusimg"/>
+              <img id="{{section.id}}-{{service.id}}-statusname-yellow" src="/static/img/yellow.svg" style="display:inline" class="healthstatusimg"/>
               {% else %}
-              <img id="{{section.sectionid}}-{{service.serviceid}}-statusname-yellow" src="/static/img/yellow.svg" style="display:none" class="healthstatusimg"/>
+              <img id="{{section.id}}-{{service.id}}-statusname-yellow" src="/static/img/yellow.svg" style="display:none" class="healthstatusimg"/>
               {% endif %}
               {% if service.healthstatus_name == "red" %}
-              <img id="{{section.sectionid}}-{{service.serviceid}}-statusname-red" src="/static/img/red.svg" style="display:inline" class="healthstatusimg"/>
+              <img id="{{section.id}}-{{service.id}}-statusname-red" src="/static/img/red.svg" style="display:inline" class="healthstatusimg"/>
               {% else %}
-              <img id="{{section.sectionid}}-{{service.serviceid}}-statusname-red" src="/static/img/red.svg" style="display:none" class="healthstatusimg"/>
+              <img id="{{section.id}}-{{service.id}}-statusname-red" src="/static/img/red.svg" style="display:none" class="healthstatusimg"/>
               {% endif %}
               {% if service.healthstatus_name == "error" %}
-              <img id="{{section.sectionid}}-{{service.serviceid}}-statusname-error" src="/static/img/error.svg" style="display:inline" class="healthstatusimg"/>
+              <img id="{{section.id}}-{{service.id}}-statusname-error" src="/static/img/error.svg" style="display:inline" class="healthstatusimg"/>
               {% else %}
-              <img id="{{section.sectionid}}-{{service.serviceid}}-statusname-error" src="/static/img/error.svg" style="display:none" class="healthstatusimg"/>
+              <img id="{{section.id}}-{{service.id}}-statusname-error" src="/static/img/error.svg" style="display:none" class="healthstatusimg"/>
               {% endif %}
         </div>
         <div class="healthstatusbuttons">
-            <A href="javascript:showCustomAlert(`{{section.name}}`,`{{service.name}}`,healthstatus['{{section.sectionid}}']['{{service.serviceid}}']['message'])"><img src="/static/img/info.svg" class="imgbutton"/></A> 
+            <A href="javascript:showCustomAlert(`{{section.name}}`,`{{service.name}}`,healthstatus['{{section.id}}']['{{service.id}}']['message'])"><img src="/static/img/info.svg" class="imgbutton"/></A> 
             {% if service.healthstatus_persistent %}
-            <span id="{{section.sectionid}}-{{service.serviceid}}-details">
+            <span id="{{section.id}}-{{service.id}}-details">
             {% else %}
-            <span id="{{section.sectionid}}-{{service.serviceid}}-details" style="display:none">
+            <span id="{{section.id}}-{{service.id}}-details" style="display:none">
             {% endif %}
             | 
             {% if service.healthstatus[1] %}
-            <A target="health check detail" id="{{section.sectionid}}-{{service.serviceid}}-details-link" href="{{baseurl}}/details/{{service.sectionid}}/{{service.serviceid}}/{{service.healthstatus[1][0].strftime('%Y-%m-%dT%H:%M:%S.%f')}}"><img src="/static/img/details.svg" class="imgbutton"/></A>
+            <A target="health check detail" id="{{section.id}}-{{service.id}}-details-link" href="{{baseurl}}/details/{{section.id}}/{{service.id}}/{{service.healthstatus[1][0].strftime('%Y-%m-%dT%H:%M:%S.%f')}}"><img src="/static/img/details.svg" class="imgbutton"/></A>
             {% else %}
-            <A target="health check detail" id="{{section.sectionid}}-{{service.serviceid}}-details-link" href="#"><img src="/static/img/details.svg" class="imgbutton"/></A>
+            <A target="health check detail" id="{{section.id}}-{{service.id}}-details-link" href="#"><img src="/static/img/details.svg" class="imgbutton"/></A>
             {% endif %}
             </span>
             {% if service.historyenabled %}
-            <span id="{{section.sectionid}}-{{service.serviceid}}-history">
-            | <A target="health check history" id="{{section.sectionid}}-{{service.serviceid}}-history-link" href="{{baseurl}}/history/{{service.sectionid}}/{{service.serviceid}}"><img src="/static/img/history.svg" class="imgbutton"/></A>
+            <span id="{{section.id}}-{{service.id}}-history">
+            | <A target="health check history" id="{{section.id}}-{{service.id}}-history-link" href="{{baseurl}}/history/{{section.id}}/{{service.id}}"><img src="/static/img/history.svg" class="imgbutton"/></A>
             </span>
             {% endif %}
             {% if service.errorhistoryenabled %}
-            <span id="{{section.sectionid}}-{{service.serviceid}}-history">
-            | <A target="health check error history" id="{{section.sectionid}}-{{service.serviceid}}-errorhistory-link" href="{{baseurl}}/errorhistory/{{service.sectionid}}/{{service.serviceid}}"><img src="/static/img/errorhistory.svg" class="imgbutton"/></A>
+            <span id="{{section.id}}-{{service.id}}-history">
+            | <A target="health check error history" id="{{section.id}}-{{service.id}}-errorhistory-link" href="{{baseurl}}/errorhistory/{{section.id}}/{{service.id}}"><img src="/static/img/errorhistory.svg" class="imgbutton"/></A>
             </span>
             {% endif %}
         </div>

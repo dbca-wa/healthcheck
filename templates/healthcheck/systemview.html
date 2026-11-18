@@ -16,9 +16,9 @@
   </head>
   <body>
       {% if editing %}
-      <form action="/healthcheck/systemview/{{viewmeta.id}}" method="POST">
+      <form action="/healthcheck/admin/systemview/{{viewmeta.id}}" method="POST">
       {% else %}
-      <form action="/healthcheck/systemview" method="POST">
+      <form action="/healthcheck/admin/systemview" method="POST">
       {% endif %}
       <h3>
       <table class="menubar"><tr><th>
@@ -32,7 +32,7 @@
             <button type="submit" name="action" value="save" style="padding-left:10px;padding-right:10px;">Save</button> 
             {% if editing %}
             | 
-            <button type="button" onclick="window.location.href='/healthcheck/systemview/{{viewmeta.id}}/delete'" style="padding-left:10px;padding-right:10px">Delete</button>
+            <button type="button" onclick="window.location.href='/healthcheck/admin/systemview/{{viewmeta.id}}/delete'" style="padding-left:10px;padding-right:10px">Delete</button>
             {% endif %}
             | 
             <button type="submit" name="action" value="cancel" style="padding-left:10px;padding-right:10px">Cancel</button>

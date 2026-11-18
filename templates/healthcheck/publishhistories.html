@@ -27,7 +27,7 @@
       {% if message %}
       <h4 style="color:red;white-space:pre;">{{message}}<h4>
       {% endif %}
-      <form action="/healthcheck/config/rollback" method="POST">
+      <form action="/healthcheck/admin/config/rollback" method="POST">
       <table border=1 style="width:90%">
       {% for history in publishhistories %}
       <tr>

@@ -1,16 +1,7 @@
 
 class SystemShutdown(Exception):
-    def __init__(self):
-        super().__init__("System is shutdowning")
-
-class SendDataToSocketServerFailed(Exception):
-    pass
-
-class ReceiveDataFromSocketServerFailed(Exception):
-    pass
-
-class SocketClientTypeNotSupport(Exception):
-    pass
+    def __init__(self,msg="System is shutdowning"):
+        super().__init__(msg)
 
 class MalformedData(Exception):
     pass

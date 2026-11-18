@@ -20,7 +20,7 @@
       DBCA Health Check
       </th><td style="text-aligh:right">
       {% if can_admin %}
-      <A href="/healthcheck/systemview">Add View</A>
+      <A href="/healthcheck/admin/systemview">Add View</A>
       {% endif %}
       </td>
         {% include 'healthcheck/inc/help.html' %}
@@ -36,9 +36,10 @@
           <td>{{defaultview.description}}</td>
           <td style="width:300px">
               {% if can_admin %}
-              <A href="/healthcheck/customize">Config</A> | 
+              <A href="/healthcheck/customize">Setting</A> | 
               {% endif %}
-              <A href="/healthcheck/dashboard">View</A>
+              <A href="/healthcheck/json" target="_jsondata">JSON</A> | 
+              <A href="/healthcheck/dashboard">Dashboard</A>
           </td>
       </tr>
       {% for view in systemviews %}
@@ -48,10 +49,11 @@
           <td>{{view.description}}</td>
           <td>
               {% if can_admin %}
-              <A href="/healthcheck/systemview/{{view.id}}">Edit</A> | 
-              <A href="/healthcheck/systemview/{{view.id}}/delete">Delete</A> | 
-              <A href="/healthcheck/config/view/{{view.id}}">Config</A> | 
+              <A href="/healthcheck/admin/systemview/{{view.id}}">Edit</A> | 
+              <A href="/healthcheck/admin/systemview/{{view.id}}/delete">Delete</A> | 
+              <A href="/healthcheck/admin/systemview/{{view.id}}/setting">Setting</A> | 
               {% endif %}
+              <A href="/healthcheck/json/{{view.id}}" target="_jsondata">JSON</A> | 
               <A href="/healthcheck/prtg/{{view.id}}" target="_prtgdata">PRTG</A> | 
               <A href="/healthcheck/dashboard/{{view.id}}">Dashboard</A> 
           </td>
@@ -64,7 +66,7 @@
       PRTG Sensors
       </th><td style="text-aligh:right">
       {% if can_admin %}
-      <A href="/healthcheck/prtgsensor">Add Sensor</A>
+      <A href="/healthcheck/admin/prtgsensor">Add Sensor</A>
       {% endif %}
       </td>
         {% include 'healthcheck/inc/help.html' %}
@@ -79,9 +81,9 @@
           <td>{{sensor.description}}</td>
           <td style="width:300px">
               {% if can_admin %}
-              <A href="/healthcheck/prtgsensor/{{sensor.id}}">Edit</A> | 
-              <A href="/healthcheck/prtgsensor/{{sensor.id}}/delete">Delete</A> | 
-              <A href="/healthcheck/config/prtgsensor/{{sensor.id}}">Config</A> | 
+              <A href="/healthcheck/admin/prtgsensor/{{sensor.id}}">Edit</A> | 
+              <A href="/healthcheck/admin/prtgsensor/{{sensor.id}}/delete">Delete</A> | 
+              <A href="/healthcheck/admin/prtgsensor/{{sensor.id}}/setting">Setting</A> | 
               {% endif %}
               <A href="/healthcheck/prtg/{{sensor.id}}" target="_prtgdata">PRTG</A>
           </td>
