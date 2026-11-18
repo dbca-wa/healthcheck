@@ -75,7 +75,7 @@ class SocketClient(object):
                     if self._last_connecttime:
                         wait = settings.BLOCK_TIMEOUT - (timezone.now() - self._last_connecttime).total_seconds()
                         if wait > 0:
-                            await asyncio.sleep(settings.BLOCK_TIMEOUT)
+                            await asyncio.sleep(wait)
 
                     async with asyncio.timeout(2):
                         reader,writer = await asyncio.open_connection(self.host,self.port) 
@@ -174,7 +174,7 @@ class SocketClient(object):
             raise ex
         except asyncio.TimeoutError as ex:
             #timeout doesn't mean the server is offline,
-            #logger.error("{}: Failed to receive data from server.{}:{}".format(self,ex.__class__.__name__,str(ex)))
+            #logger.error("{}: Failed to receive data from server within {} seconds.{}:{}".format(self,self.timeout,ex.__class__.__name__,str(ex)))
             #await self.close()
             raise ex
         except (exceptions.ConnectionClosed,ConnectionResetError,ConnectionResetError) as ex:

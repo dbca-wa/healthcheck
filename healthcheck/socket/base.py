@@ -69,29 +69,34 @@ class BaseConnection(object):
 
 
     async def send(self,data):
-        if shutdown.shutdowning:
-            await self.shutdown()
-            raise exceptions.SystemShutdown()
-        if not self.writer:
-            #already closed
-            return
-
         try:
-            data = json.dumps(data,cls=serializers.JSONEncoder)
-            data = "{}\n".format(data).encode()
+            if shutdown.shutdowning:
+                await self.shutdown()
+                raise exceptions.SystemShutdown()
+            if not self.writer:
+                #already closed
+                logger.error("Failed to send data({}) to healthcheck web server, connection was closed.".format(data))
+                return
+    
+            try:
+                data = json.dumps(data,cls=serializers.JSONEncoder)
+                data = "{}\n".format(data).encode()
+            except Exception as ex:
+                raise exceptions.MalformedData("{}: Failed to encode the response.{}: {}".format(self,ex.__class__.__name__,str(ex)))
+    
+            try:
+                self.writer.write(data)
+                await self.writer.drain()
+                logger.debug("{}: Succeed to send the data({})".format(self,data))
+            except TypeError as ex:
+                if self.writer:
+                    raise ex
+            except Exception as ex:
+                await self.close()
+                raise exceptions.ConnectionClosed("{}: Failed to send the data({}), close the connection. {}: {}".format(self,data,ex.__class__.__name__,str(ex)))
         except Exception as ex:
-            raise exceptions.MalformedData("{}: Failed to encode the response.{}: {}".format(self,ex.__class__.__name__,str(ex)))
-
-        try:
-            self.writer.write(data)
-            await self.writer.drain()
-            logger.debug("{}: Succeed to send the data({})".format(self,data))
-        except TypeError as ex:
-            if self.writer:
-                raise ex
-        except Exception as ex:
-            await self.close()
-            raise exceptions.ConnectionClosed("{}: Failed to send the data({}), close the connection. {}: {}".format(self,data,ex.__class__.__name__,str(ex)))
+            logger.error("Failed to send data({}) to healthcheck web server.{}: {}".format(data,ex.__class__.__name__,str(ex)))
+            raise
 
     async def __aenter__(self):
         return self

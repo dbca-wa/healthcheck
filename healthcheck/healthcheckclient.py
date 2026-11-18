@@ -151,9 +151,12 @@ class BaseHealthStatusListenerClient(socket.SocketClient):
                         logger.error("The status code({}) Not Support".format(status_code))
                 except exceptions.SystemShutdown as ex:
                     break
+                except asyncio.TimeoutError as ex:
+                    logger.error("{}: Failed to receive data from server within {} seconds.{}:{}".format(self,self.timeout,ex.__class__.__name__,str(ex)))
+                    continue
                 except Exception as ex:
                     logger.error("{}: Failed to receive the data({},{}).{}: {}".format(self,status_code,data,ex.__class__.__name__,str(ex)))
-    
+                    continue
         except Exception as ex:
             pass
         finally:
@@ -168,8 +171,8 @@ class HealthStatusListenerClient(BaseHealthStatusListenerClient):
     conn_type = socket.HEALTHSTATUS_SUBSCRIPTOR
 
     def __init__(self):
-        #super().__init__(settings.HEARTBEAT * 2)
-        super().__init__(0)
+        super().__init__(settings.HEARTBEAT * 2)
+        #super().__init__(0)
 
     @property
     def healthcheck(self):
