@@ -8,9 +8,10 @@ spec:
       volumes:
         - name: healthcheck-data
           persistentVolumeClaim:
-            claimName: healthcheck-data-uat
+            claimName: healthcheck-data2-uat
       containers:
         - name: healthcheck
+          imagePullPolicy: Always
           envFrom:
             - secretRef:
                 name: healthcheck-env-uat
