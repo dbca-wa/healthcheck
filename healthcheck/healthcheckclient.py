@@ -78,6 +78,11 @@ class BaseHealthStatusListenerClient(socket.SocketClient):
         self._healthstatus_task = None
         self._wait = Event()
         self.continuouscheck_started = None
+        self.waiting_ping = False
+
+    async def close(self):
+        await super().close()
+        self.waiting_ping = False
 
     async def wait(self,timeout=None):
         """
@@ -145,15 +150,31 @@ class BaseHealthStatusListenerClient(socket.SocketClient):
                         self._statuslist.add("continuouscheck_stopped")
                         self.continuouscheck_started = False
                         self._wait.set()
+                    elif status_code == socket.PING and data == "PONG":
+                        #received the ping response from server
+                        self.waiting_ping = False
+
                     elif status_code < 0:
                         logger.error("{}: Get a failed response: {}".format(data))
                     else:
                         logger.error("The status code({}) Not Support".format(status_code))
                 except exceptions.SystemShutdown as ex:
                     break
+                except asyncio.TimeoutError as ex:
+                    if self.waiting_ping:
+                        logger.error("{}: Failed to ping server within {} seconds.{}:{}".format(self,self.timeout,ex.__class__.__name__,str(ex)))
+                        await self.close()
+                    else:
+                        try:
+                            await self.send("ping",0)
+                            self.waiting_ping = True
+                        except Exception as ex:
+                            #failed to ping server
+                            await self.close()
+                    continue
                 except Exception as ex:
                     logger.error("{}: Failed to receive the data({},{}).{}: {}".format(self,status_code,data,ex.__class__.__name__,str(ex)))
-    
+                    continue
         except Exception as ex:
             pass
         finally:
@@ -168,8 +189,8 @@ class HealthStatusListenerClient(BaseHealthStatusListenerClient):
     conn_type = socket.HEALTHSTATUS_SUBSCRIPTOR
 
     def __init__(self):
-        #super().__init__(settings.HEARTBEAT * 2)
-        super().__init__(0)
+        super().__init__(settings.HEARTBEAT + 10)
+        #super().__init__(0)
 
     @property
     def healthcheck(self):
@@ -179,7 +200,8 @@ class EditingHealthStatusListenerClient(BaseHealthStatusListenerClient):
     conn_type = socket.EDITING_HEALTHSTATUS_SUBSCRIPTOR
 
     def __init__(self):
-        super().__init__(0)
+        super().__init__(settings.HEARTBEAT + 10)
+        #super().__init__(0)
 
     @property
     def healthcheck(self):

@@ -25,12 +25,44 @@ class BaseHealthStatusSubscriptor(socket.Connection):
         super().__init__(server,clientaddr,reader,writer)
         self._send_task = None
 
-    async def receive(self):
-        raise Exception("Receiving data Not Supported")
+    async def run(self):
+        """
+        Only support data 'ping'
+        """
+        try:
+            logger.debug("{}: The HealthStatusSubscriptor receiver is created for client({}).".format(self,self.clientaddr))
+            while not shutdown.shutdowning:
+                try:
+                    data = await self.receive()
+                    if not isinstance(data,str):
+                        continue
+                    if data != "ping":
+                        continue
+                    await self.send([socket.PING,"PONG"])
+                except exceptions.ConnectionClosed as ex:
+                    raise ex
+                except exceptions.SystemShutdown as ex:
+                    raise ex
+                except Exception as ex:
+                    continue
+        except exceptions.ConnectionClosed as ex:
+            pass
+        except exceptions.SystemShutdown as ex:
+            pass
+        except Exception as ex:
+            logger.error("{}: Unexpected exception.\n{}".format(self,traceback.format_exc()))
+        finally:
+            await self.close()
+            #unregistered the subscriptor
+            try:
+                del self.__class__.subscriptors[self.__class__.subscriptors.index(self)]
+            except:
+                pass
 
     async def register(self):
         async with self._lock:
             self.__class__.subscriptors.append(self)
+        asyncio.create_task(self.run())
 
     @classmethod
     async def _send_data(cls,data):
