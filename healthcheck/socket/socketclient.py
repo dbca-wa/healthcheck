@@ -26,7 +26,7 @@ class SocketClient(object):
         self.port = port
         self.timeout = timeout
         self.__class__.count += 1
-        self.name = "{} socketclient({}:{})_{}".format(self.conn_type,self.host,self.port,self.count)
+        self.name = "{} socketclient({}:{})_{}({})".format(self.conn_type,self.host,self.port,os.getpid(),self.count)
         self._conn = None #[reader,writer]
         self._last_connecttime = None
         shutdown.register_service(self)
