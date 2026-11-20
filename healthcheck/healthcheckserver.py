@@ -1,4 +1,5 @@
 import logging
+import traceback
 import socket as builtinsocket
 import asyncio
 import aiofiles
@@ -21,9 +22,6 @@ editing_healthcheck = None
 class BaseHealthStatusSubscriptor(socket.Connection):
     subscriptors = None
     _lock = None
-    def __init__(self,server,clientaddr,reader,writer):
-        super().__init__(server,clientaddr,reader,writer)
-        self._send_task = None
 
     async def run(self):
         """
@@ -51,47 +49,34 @@ class BaseHealthStatusSubscriptor(socket.Connection):
             pass
         except Exception as ex:
             logger.error("{}: Unexpected exception.\n{}".format(self,traceback.format_exc()))
-        finally:
-            await self.close()
-            #unregistered the subscriptor
-            try:
-                del self.__class__.subscriptors[self.__class__.subscriptors.index(self)]
-            except:
-                pass
+
+    async def close(self):
+        if not self.writer:
+            return
+        #unregistered the subscriptor
+        try:
+            del self.subscriptors[self.subscriptors.index(self)]
+        except:
+            pass
+        await super().close()
 
     async def register(self):
         async with self._lock:
-            self.__class__.subscriptors.append(self)
+            self.subscriptors.append(self)
         asyncio.create_task(self.run())
 
+    async def send(self,data):
+        try:
+            await super().send(data)
+        except Exception as ex:
+            #ignore the exceptions
+            logger.error(str(ex))
+            
     @classmethod
     async def _send_data(cls,data):
-        try:
-            async with cls._lock:
-                for index in range(len(cls.subscriptors) - 1,-1,-1):
-                    try:
-                        subscriptor = cls.subscriptors[index]
-                    except IndexError as ex:
-                        continue
-                    subscriptor._send_task = asyncio.create_task(subscriptor.send(data))
-    
-                for index in range(len(cls.subscriptors) - 1,-1,-1):
-                    try:
-                        subscriptor = cls.subscriptors[index]
-                        if subscriptor._send_task:
-                            try:
-                                await subscriptor._send_task
-                            except exceptions.ConnectionClosed as ex:
-                                #connection closed, remove it from subscriptors
-                                del cls.subscriptors[index]
-                            finally:
-                                subscriptor._send_task = None
-                    except IndexError as ex:
-                        continue
-        except Exception as ex:
-            if not shutdown.shutdowning:
-                raise ex
-            
+        async with cls._lock:
+            for subscriptor in cls.subscriptors:
+                asyncio.create_task(subscriptor.send(data))
 
     @classmethod
     async def send_healthstatus(cls,data):
