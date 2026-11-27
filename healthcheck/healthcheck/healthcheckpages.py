@@ -143,18 +143,24 @@ class HealthCheckPage(object):
         return await self._healthcheckpages.get_detailfile(starttime)
 
     async def _load(self):
+        """
+        Get the page size and set the last healthcheck status
+        """
         if self._size is not None:
             return
 
         try:
             size = 0
+            last_healthcheckstatus = None
             async with aiofiles.open(self._filepath,'r') as f:
                 while True:
                     data = await f.readline()
                     if data == "":
                         break
                     size += 1
-                    self.set_last_healthcheck(HealthCheckStatus.deserialize(data))
+                    last_healthcheckstatus = data
+                if last_healthcheckstatus:
+                    self.set_last_healthcheck(HealthCheckStatus.deserialize(last_healthcheckstatus))
             self._size = size
         except FileNotFoundError as ex:
             self._size = 0
@@ -433,6 +439,14 @@ class BasicHealthCheckPages(object):
                 filesize = await aiofiles.os.path.getsize(self.pageindexfile)
                 if self._filesize != filesize:
                     await self._load()
+                elif self._pages and self._servicehealthcheck.healthstatus_nextchecktime:
+                    #sometimes, pageindex file is not loaded after a new pages is created, don't know the real reason. maybe caused by nfs file system
+                    #use this logic to check whether the last page is full and then decide whether the pageindex file should be reload or not.
+                    #calculate the number of healthchecks between the page start time and nextchecktime.
+                    healthchecks = int(((self._servicehealthcheck.healthstatus_nextchecktime - self._pages[-1].starttime).total_seconds()) / self._servicehealthcheck.interval) + 1
+                    if healthchecks > settings.HEALTHSTATUS_PAGESIZE:
+                        #the last page is full and an new pages should be created. reload the pageindex file
+                        await self._load()
             except FileNotFoundError as ex:
                 self._filesize = None
                 self._pages = None
