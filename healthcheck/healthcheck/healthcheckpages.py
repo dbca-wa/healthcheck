@@ -394,8 +394,8 @@ class BasicHealthCheckPages(object):
         else:
             return None
 
-    async def _load(self):
-        if self._pages is not None:
+    async def _load(self,force=False):
+        if self._pages is not None and not force:
             #already loaded
             return
 
@@ -433,12 +433,13 @@ class BasicHealthCheckPages(object):
         Called by web app; should reload if if it was changed by healthcheck server
         """
         if self._pages is None or self._filesize is None:
-            await self._load()
+            await self._load(force=True)
         else:
             try:
                 filesize = await aiofiles.os.path.getsize(self.pageindexfile)
                 if self._filesize != filesize:
-                    await self._load()
+                    await self._load(force=True)
+                """
                 elif self._pages and self._servicehealthcheck.healthstatus_nextchecktime:
                     #sometimes, pageindex file is not loaded after a new pages is created, don't know the real reason. maybe caused by nfs file system
                     #use this logic to check whether the last page is full and then decide whether the pageindex file should be reload or not.
@@ -446,7 +447,8 @@ class BasicHealthCheckPages(object):
                     healthchecks = int(((self._servicehealthcheck.healthstatus_nextchecktime - self._pages[-1].starttime).total_seconds()) / self._servicehealthcheck.interval) + 1
                     if healthchecks > settings.HEALTHSTATUS_PAGESIZE:
                         #the last page is full and an new pages should be created. reload the pageindex file
-                        await self._load()
+                        await self._load(force=True)
+                """
             except FileNotFoundError as ex:
                 self._filesize = None
                 self._pages = None
@@ -691,14 +693,14 @@ class HealthCheckPages(BasicHealthCheckPages):
         
         return os.path.join(self.basedir,"{}.json".format(starttime.strftime("%Y%m%dT%H%M%S")))
 
-    async def _load(self):
+    async def _load(self,force=False):
         if not self._servicehealthcheck.url:
             #is not a real healthcheck,for example: heartbeat
             self._pages = [LastHealthCheckInMemory(self,self.pagefile(None))]
         elif not self.historyenabled:
             self._pages = [LastHealthCheck(self,self.pagefile(None))]
         else:
-            await super()._load()
+            await super()._load(force=force)
 
     async def get_pages(self):
         """
